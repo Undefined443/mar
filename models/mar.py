@@ -259,7 +259,7 @@ class MAR(nn.Module):
 
         return loss
 
-    def sample_tokens(self, bsz, num_iter=64, cfg=1.0, cfg_schedule="linear", labels=None, temperature=1.0, progress=False):
+    def sample_tokens(self, bsz, num_iter=64, cfg=1.0, cfg_schedule="linear", labels=None, temperature=1.0, progress=True):
 
         # init and sample generation orders
         mask = torch.ones(bsz, self.seq_len).cuda()

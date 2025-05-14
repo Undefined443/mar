@@ -215,7 +215,7 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         log_writer.add_scalar('is{}'.format(postfix), inception_score, epoch)
         print("FID: {:.4f}, Inception Score: {:.4f}".format(fid, inception_score))
         # remove temporal saving folder
-        shutil.rmtree(save_folder)
+        # shutil.rmtree(save_folder)  # 不删除生成的图片
 
     torch.distributed.barrier()
     time.sleep(10)
