@@ -74,21 +74,21 @@ class MAR(nn.Module):
 
         self.encoder_blocks = nn.ModuleList([
             Block(encoder_embed_dim, encoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
-                  proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth)])
+                  proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
         self.encoder_norm = norm_layer(encoder_embed_dim)
 
         # --------------------------------------------------------------------------
         # MAR decoder specifics
-        self.decoder_embed = nn.Linear(encoder_embed_dim, decoder_embed_dim, bias=True)
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
-        self.decoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, decoder_embed_dim))
+        # self.decoder_embed = nn.Linear(encoder_embed_dim, decoder_embed_dim, bias=True)
+        # self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
+        # self.decoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, decoder_embed_dim))
 
-        self.decoder_blocks = nn.ModuleList([
-            Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
-                  proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(decoder_depth)])
+        # self.decoder_blocks = nn.ModuleList([
+        #     Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
+        #           proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(decoder_depth)])
 
-        self.decoder_norm = norm_layer(decoder_embed_dim)
-        self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
+        # self.decoder_norm = norm_layer(decoder_embed_dim)
+        # self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
 
         self.initialize_weights()
 
@@ -108,10 +108,10 @@ class MAR(nn.Module):
         # parameters
         torch.nn.init.normal_(self.class_emb.weight, std=.02)
         torch.nn.init.normal_(self.fake_latent, std=.02)
-        torch.nn.init.normal_(self.mask_token, std=.02)
+        # torch.nn.init.normal_(self.mask_token, std=.02)
         torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
-        torch.nn.init.normal_(self.decoder_pos_embed_learned, std=.02)
-        torch.nn.init.normal_(self.diffusion_pos_embed_learned, std=.02)
+        # torch.nn.init.normal_(self.decoder_pos_embed_learned, std=.02)
+        # torch.nn.init.normal_(self.diffusion_pos_embed_learned, std=.02)
 
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
@@ -154,7 +154,7 @@ class MAR(nn.Module):
         orders = []
         for _ in range(bsz):
             order = np.array(list(range(self.seq_len)))
-            np.random.shuffle(order)
+            #np.random.shuffle(order)
             orders.append(order)
         orders = torch.Tensor(np.array(orders)).cuda().long()
         return orders
@@ -162,11 +162,11 @@ class MAR(nn.Module):
     def random_masking(self, x, orders):
         # generate token mask
         bsz, seq_len, embed_dim = x.shape
-        mask_rate = self.mask_ratio_generator.rvs(1)[0]
-        num_masked_tokens = int(np.ceil(seq_len * mask_rate))
-        mask = torch.zeros(bsz, seq_len, device=x.device)
-        mask = torch.scatter(mask, dim=-1, index=orders[:, :num_masked_tokens],
-                             src=torch.ones(bsz, seq_len, device=x.device))
+        # mask_rate = self.mask_ratio_generator.rvs(1)[0]
+        # num_masked_tokens = int(np.ceil(seq_len * mask_rate))
+        mask = torch.ones(bsz, seq_len, device=x.device)
+        # mask = torch.scatter(mask, dim=-1, index=orders[:, :num_masked_tokens],
+        #                      src=torch.ones(bsz, seq_len, device=x.device))
         return mask
 
     def forward_mae_encoder(self, x, mask, class_embedding):
@@ -190,7 +190,7 @@ class MAR(nn.Module):
         x = self.z_proj_ln(x)
 
         # dropping
-        x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
+        # x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
 
         # apply Transformer blocks
         if self.grad_checkpointing and not torch.jit.is_scripting():
@@ -200,6 +200,7 @@ class MAR(nn.Module):
             for block in self.encoder_blocks:
                 x = block(x)
         x = self.encoder_norm(x)
+        x = x[:, self.buffer_size:]  # 去掉 buffer
 
         return x
 
@@ -231,6 +232,10 @@ class MAR(nn.Module):
 
     def forward_loss(self, z, target, mask):
         bsz, seq_len, _ = target.shape
+        seq_len -= 1
+        target = target[:, 1:, :]
+        z = z[:, :-1, :]
+        mask = mask[:, 1:]
         target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
@@ -249,10 +254,10 @@ class MAR(nn.Module):
         mask = self.random_masking(x, orders)
 
         # mae encoder
-        x = self.forward_mae_encoder(x, mask, class_embedding)
+        z = self.forward_mae_encoder(x, mask, class_embedding)
 
         # mae decoder
-        z = self.forward_mae_decoder(x, mask)
+        # z = self.forward_mae_decoder(x, mask)
 
         # diffloss
         loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
@@ -284,10 +289,10 @@ class MAR(nn.Module):
                 mask = torch.cat([mask, mask], dim=0)
 
             # mae encoder
-            x = self.forward_mae_encoder(tokens, mask, class_embedding)
+            z = self.forward_mae_encoder(tokens, mask, class_embedding)
 
             # mae decoder
-            z = self.forward_mae_decoder(x, mask)
+            # z = self.forward_mae_decoder(x, mask)
 
             # mask ratio for the next round, following MaskGIT and MAGE.
             mask_ratio = np.cos(math.pi / 2. * (step + 1) / num_iter)
