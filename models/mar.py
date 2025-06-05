@@ -153,8 +153,8 @@ class MAR(nn.Module):
         # generate a batch of random generation orders
         orders = []
         for _ in range(bsz):
-            order = np.array(list(range(self.seq_len)))
-            #np.random.shuffle(order)
+            # order = np.array(list(range(self.seq_len)))
+            order = np.arange(self.seq_len-1, -1, -1)
             orders.append(order)
         orders = torch.Tensor(np.array(orders)).cuda().long()
         return orders
@@ -175,7 +175,7 @@ class MAR(nn.Module):
 
         # concat buffer
         x = torch.cat([torch.zeros(bsz, self.buffer_size, embed_dim, device=x.device), x], dim=1)
-        mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
+        # mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
 
         # random drop class embedding during training
         if self.training:
@@ -200,7 +200,7 @@ class MAR(nn.Module):
             for block in self.encoder_blocks:
                 x = block(x)
         x = self.encoder_norm(x)
-        x = x[:, self.buffer_size:]  # 去掉 buffer
+        x = x[:, self.buffer_size:]  # FIXME 去掉 buffer
 
         return x
 
@@ -232,10 +232,10 @@ class MAR(nn.Module):
 
     def forward_loss(self, z, target, mask):
         bsz, seq_len, _ = target.shape
-        seq_len -= 1
         target = target[:, 1:, :]
         z = z[:, :-1, :]
         mask = mask[:, 1:]
+        seq_len -= 1
         target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
@@ -270,6 +270,8 @@ class MAR(nn.Module):
         mask = torch.ones(bsz, self.seq_len).cuda()
         tokens = torch.zeros(bsz, self.seq_len, self.token_embed_dim).cuda()
         orders = self.sample_orders(bsz)
+        # buffer_mask = torch.zeros(bsz, self.buffer_size).cuda()
+        # mask = torch.concat([buffer_mask, mask], dim=1)
 
         indices = list(range(num_iter))
         if progress:

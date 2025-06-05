@@ -158,6 +158,16 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
                                                                  temperature=args.temperature)
                 sampled_images = vae.decode(sampled_tokens / 0.2325)
 
+        if False:
+            def vae_decode(x):
+                x = x.unsqueeze(0)
+                sampled_images = vae.decode(x / 0.2325)
+                sampled_images = sampled_images.detach().cpu()
+                sampled_images = (sampled_images + 1) / 2
+                gen_img = np.round(np.clip(sampled_images[0].numpy().transpose([1, 2, 0]) * 255, 0, 255))
+                gen_img = gen_img.astype(np.uint8)[:, :, ::-1]
+                cv2.imwrite('vae_decode.png', gen_img)
+
         # measure speed after the first generation batch
         if i >= 1:
             torch.cuda.synchronize()
