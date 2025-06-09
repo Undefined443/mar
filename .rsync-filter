@@ -2,3 +2,6 @@
 - __pycache__
 - .git
 - data
+- temp
+- tensors
+- images

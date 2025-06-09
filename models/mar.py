@@ -175,7 +175,7 @@ class MAR(nn.Module):
 
         # concat buffer
         x = torch.cat([torch.zeros(bsz, self.buffer_size, embed_dim, device=x.device), x], dim=1)
-        # mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
+        mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
 
         # random drop class embedding during training
         if self.training:
@@ -190,7 +190,8 @@ class MAR(nn.Module):
         x = self.z_proj_ln(x)
 
         # dropping
-        # x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
+        if not self.training:
+            x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
 
         # apply Transformer blocks
         if self.grad_checkpointing and not torch.jit.is_scripting():
@@ -200,7 +201,7 @@ class MAR(nn.Module):
             for block in self.encoder_blocks:
                 x = block(x)
         x = self.encoder_norm(x)
-        x = x[:, self.buffer_size:]  # FIXME 去掉 buffer
+        x = x[:, self.buffer_size-1:]  # FIXME 去掉 buffer
 
         return x
 
@@ -232,10 +233,7 @@ class MAR(nn.Module):
 
     def forward_loss(self, z, target, mask):
         bsz, seq_len, _ = target.shape
-        target = target[:, 1:, :]
         z = z[:, :-1, :]
-        mask = mask[:, 1:]
-        seq_len -= 1
         target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
@@ -250,6 +248,14 @@ class MAR(nn.Module):
         # patchify and mask (drop) tokens
         x = self.patchify(imgs)
         gt_latents = x.clone().detach()
+        if False:
+            t_x_pred = torch.load("t_x_pred.pt")
+            head = gt_latents[0, 0, :].unsqueeze(0)
+            patched = torch.cat([head, t_x_pred], dim=0).unsqueeze(0)
+            unpatchified = self.unpatchify(patched)
+            torch.save(unpatchified, "t_x_pred.pt")
+            _gt_latents = self.unpatchify(gt_latents)
+            torch.save(_gt_latents, "gt_latents.pt")
         orders = self.sample_orders(bsz=x.size(0))
         mask = self.random_masking(x, orders)
 

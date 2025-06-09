@@ -791,9 +791,9 @@ class GaussianDiffusion:
         t_epsilon = target[:255, :]
         t_x_t = x_t[:255, :]
         t_x_pred = t_x_t - t_epsilon
-        th.save(t_x_pred, "t_x_pred.pt")
         th.save(t_epsilon, "t_epsilon.pt")
         th.save(t_x_t, "t_x_t.pt")
+        th.save(t_x_pred, "t_x_pred.pt")
 
         return terms
 
