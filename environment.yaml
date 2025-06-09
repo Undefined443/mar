@@ -12,7 +12,7 @@ dependencies:
   - numpy=1.22
   - pip:
     - opencv-python==4.1.2.30
-    - timm==0.9.12
+    - -e third_party/timm
     - tensorboard==2.10.0
     - scipy==1.9.1
     - gdown==5.2.0
