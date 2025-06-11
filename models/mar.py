@@ -190,7 +190,7 @@ class MAR(nn.Module):
         x = self.z_proj_ln(x)
 
         # dropping
-        if not self.training:
+        if not self.training:  # FIXME 生成时使用 dropping
             x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
 
         # apply Transformer blocks
@@ -256,8 +256,8 @@ class MAR(nn.Module):
             torch.save(unpatchified, "t_x_pred.pt")
             _gt_latents = self.unpatchify(gt_latents)
             torch.save(_gt_latents, "gt_latents.pt")
-        orders = self.sample_orders(bsz=x.size(0))
-        mask = self.random_masking(x, orders)
+        bsz, seq_len, embed_dim = x.shape
+        mask = torch.ones(bsz, seq_len, device=x.device)
 
         # mae encoder
         z = self.forward_mae_encoder(x, mask, class_embedding)
