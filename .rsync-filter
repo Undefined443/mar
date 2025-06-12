@@ -5,3 +5,4 @@
 - tensors
 - images
 - *.pt
+- events.out.tfevents.*
