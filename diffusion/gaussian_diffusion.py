@@ -716,39 +716,28 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
+    def training_losses(self, model, x_start, t, cls_len, model_kwargs=None, noise=None):
         """
         Compute training losses for a single timestep.
         :param model: the model to evaluate loss on.
         :param x_start: the [N x C x ...] tensor of inputs.
         :param t: a batch of timestep indices.
+        :param cls_len: cls token 长度
         :param model_kwargs: if not None, a dict of extra keyword arguments to
             pass to the model. This can be used for conditioning.
         :param noise: if specified, the specific Gaussian noise to try to remove.
         :return: a dict with the key "loss" containing a tensor of shape [N].
                  Some mean or variance settings may also have other keys.
         """
-        if model_kwargs is None:
-            model_kwargs = {}
         if noise is None:
-            noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)
+            noise = th.randn_like(x_start[cls_len:])            # 对 cls 后面的 token 加噪
+        x_t = self.q_sample(x_start[cls_len:], t, noise=noise)  # 加噪
 
         terms = {}
 
-        if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
-            terms["loss"] = self._vb_terms_bpd(
-                model=model,
-                x_start=x_start,
-                x_t=x_t,
-                t=t,
-                clip_denoised=False,
-                model_kwargs=model_kwargs,
-            )["output"]
-            if self.loss_type == LossType.RESCALED_KL:
-                terms["loss"] *= self.num_timesteps
-        elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, t, **model_kwargs)
+        if self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
+            model_input = th.cat([x_start, x_t], dim=1)
+            model_output = model(model_input, t, **model_kwargs)  # 模型输出
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,

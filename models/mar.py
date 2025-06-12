@@ -77,19 +77,6 @@ class MAR(nn.Module):
                   proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
         self.encoder_norm = norm_layer(encoder_embed_dim)
 
-        # --------------------------------------------------------------------------
-        # MAR decoder specifics
-        # self.decoder_embed = nn.Linear(encoder_embed_dim, decoder_embed_dim, bias=True)
-        # self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
-        # self.decoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, decoder_embed_dim))
-
-        # self.decoder_blocks = nn.ModuleList([
-        #     Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
-        #           proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(decoder_depth)])
-
-        # self.decoder_norm = norm_layer(decoder_embed_dim)
-        # self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
-
         self.initialize_weights()
 
         # --------------------------------------------------------------------------
@@ -108,10 +95,7 @@ class MAR(nn.Module):
         # parameters
         torch.nn.init.normal_(self.class_emb.weight, std=.02)
         torch.nn.init.normal_(self.fake_latent, std=.02)
-        # torch.nn.init.normal_(self.mask_token, std=.02)
         torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
-        # torch.nn.init.normal_(self.decoder_pos_embed_learned, std=.02)
-        # torch.nn.init.normal_(self.diffusion_pos_embed_learned, std=.02)
 
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
@@ -168,68 +152,6 @@ class MAR(nn.Module):
         # mask = torch.scatter(mask, dim=-1, index=orders[:, :num_masked_tokens],
         #                      src=torch.ones(bsz, seq_len, device=x.device))
         return mask
-
-    def forward_mae_encoder(self, x, mask, class_embedding):
-        x = self.z_proj(x)
-        bsz, seq_len, embed_dim = x.shape
-
-        # concat buffer
-        x = torch.cat([torch.zeros(bsz, self.buffer_size, embed_dim, device=x.device), x], dim=1)
-        mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
-
-        # random drop class embedding during training
-        if self.training:
-            drop_latent_mask = torch.rand(bsz) < self.label_drop_prob
-            drop_latent_mask = drop_latent_mask.unsqueeze(-1).cuda().to(x.dtype)
-            class_embedding = drop_latent_mask * self.fake_latent + (1 - drop_latent_mask) * class_embedding
-
-        x[:, :self.buffer_size] = class_embedding.unsqueeze(1)
-
-        # encoder position embedding
-        x = x + self.encoder_pos_embed_learned
-        x = self.z_proj_ln(x)
-
-        # dropping
-        if not self.training:  # FIXME 生成时使用 dropping
-            x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
-
-        # apply Transformer blocks
-        if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.encoder_blocks:
-                x = checkpoint(block, x)
-        else:
-            for block in self.encoder_blocks:
-                x = block(x)
-        x = self.encoder_norm(x)
-        x = x[:, self.buffer_size-1:]  # FIXME 去掉 buffer
-
-        return x
-
-    def forward_mae_decoder(self, x, mask):
-
-        x = self.decoder_embed(x)
-        mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
-
-        # pad mask tokens
-        mask_tokens = self.mask_token.repeat(mask_with_buffer.shape[0], mask_with_buffer.shape[1], 1).to(x.dtype)
-        x_after_pad = mask_tokens.clone()
-        x_after_pad[(1 - mask_with_buffer).nonzero(as_tuple=True)] = x.reshape(x.shape[0] * x.shape[1], x.shape[2])
-
-        # decoder position embedding
-        x = x_after_pad + self.decoder_pos_embed_learned
-
-        # apply Transformer blocks
-        if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.decoder_blocks:
-                x = checkpoint(block, x)
-        else:
-            for block in self.decoder_blocks:
-                x = block(x)
-        x = self.decoder_norm(x)
-
-        x = x[:, self.buffer_size:]
-        x = x + self.diffusion_pos_embed_learned
-        return x
 
     def forward_loss(self, z, target, mask):
         bsz, seq_len, _ = target.shape

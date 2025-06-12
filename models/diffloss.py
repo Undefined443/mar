@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 import math
+import scipy.stats as stats
 
 from diffusion import create_diffusion
+from timm.models.vision_transformer import Block
 
 
 class DiffLoss(nn.Module):
@@ -11,7 +13,7 @@ class DiffLoss(nn.Module):
     def __init__(self, target_channels, z_channels, depth, width, num_sampling_steps, grad_checkpointing=False):
         super(DiffLoss, self).__init__()
         self.in_channels = target_channels
-        self.net = SimpleMLPAdaLN(
+        self.net = CausalAttention(
             in_channels=target_channels,
             model_channels=width,
             out_channels=target_channels * 2,  # for vlb loss
@@ -96,38 +98,6 @@ class TimestepEmbedder(nn.Module):
         return t_emb
 
 
-class ResBlock(nn.Module):
-    """
-    A residual block that can optionally change the number of channels.
-    :param channels: the number of input channels.
-    """
-
-    def __init__(
-        self,
-        channels
-    ):
-        super().__init__()
-        self.channels = channels
-
-        self.in_ln = nn.LayerNorm(channels, eps=1e-6)
-        self.mlp = nn.Sequential(
-            nn.Linear(channels, channels, bias=True),
-            nn.SiLU(),
-            nn.Linear(channels, channels, bias=True),
-        )
-
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(channels, 3 * channels, bias=True)
-        )
-
-    def forward(self, x, y):
-        shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
-        h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
-        h = self.mlp(h)
-        return x + gate_mlp * h
-
-
 class FinalLayer(nn.Module):
     """
     The final layer adopted from DiT.
@@ -148,101 +118,130 @@ class FinalLayer(nn.Module):
         return x
 
 
-class SimpleMLPAdaLN(nn.Module):
+class CausalAttention(nn.Module):
     """
-    The MLP for Diffusion Loss.
-    :param in_channels: channels in the input Tensor.
-    :param model_channels: base channel count for the model.
-    :param out_channels: channels in the output Tensor.
-    :param z_channels: channels in the condition.
-    :param num_res_blocks: number of residual blocks per downsample.
+    由 MAE Encoder 修改而来
     """
-
-    def __init__(
-        self,
-        in_channels,
-        model_channels,
-        out_channels,
-        z_channels,
-        num_res_blocks,
-        grad_checkpointing=False
-    ):
+    def __init__(self, img_size=256, vae_stride=16, patch_size=1,
+                 encoder_embed_dim=1024, encoder_depth=16, encoder_num_heads=16,
+                 decoder_embed_dim=1024, decoder_depth=16, decoder_num_heads=16,
+                 mlp_ratio=4., norm_layer=nn.LayerNorm,
+                 vae_embed_dim=16,
+                 mask_ratio_min=0.7,
+                 label_drop_prob=0.1,
+                 class_num=1000,
+                 attn_dropout=0.1,
+                 proj_dropout=0.1,
+                 buffer_size=64,
+                 diffloss_d=3,
+                 diffloss_w=1024,
+                 num_sampling_steps='100',
+                 diffusion_batch_mul=4,
+                 grad_checkpointing=False,
+                 ):
         super().__init__()
 
-        self.in_channels = in_channels
-        self.model_channels = model_channels
-        self.out_channels = out_channels
-        self.num_res_blocks = num_res_blocks
+        # --------------------------------------------------------------------------
+        # VAE and patchify specifics
+        self.vae_embed_dim = vae_embed_dim
+
+        self.img_size = img_size
+        self.vae_stride = vae_stride
+        self.patch_size = patch_size
+        self.seq_h = self.seq_w = img_size // vae_stride // patch_size
+        self.seq_len = self.seq_h * self.seq_w
+        self.token_embed_dim = vae_embed_dim * patch_size**2
         self.grad_checkpointing = grad_checkpointing
 
-        self.time_embed = TimestepEmbedder(model_channels)
-        self.cond_embed = nn.Linear(z_channels, model_channels)
+        # --------------------------------------------------------------------------
+        # Class Embedding
+        self.num_classes = class_num
+        self.class_emb = nn.Embedding(class_num, encoder_embed_dim)
+        self.label_drop_prob = label_drop_prob
+        # Fake class embedding for CFG's unconditional generation
+        self.fake_latent = nn.Parameter(torch.zeros(1, encoder_embed_dim))
 
-        self.input_proj = nn.Linear(in_channels, model_channels)
+        # --------------------------------------------------------------------------
+        # MAR variant masking ratio, a left-half truncated Gaussian centered at 100% masking ratio with std 0.25
+        self.mask_ratio_generator = stats.truncnorm((mask_ratio_min - 1.0) / 0.25, 0, loc=1.0, scale=0.25)
 
-        res_blocks = []
-        for i in range(num_res_blocks):
-            res_blocks.append(ResBlock(
-                model_channels,
-            ))
+        # --------------------------------------------------------------------------
+        # MAR encoder specifics
+        self.z_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
+        self.z_proj_ln = nn.LayerNorm(encoder_embed_dim, eps=1e-6)
+        self.buffer_size = buffer_size
+        self.encoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, encoder_embed_dim))
 
-        self.res_blocks = nn.ModuleList(res_blocks)
-        self.final_layer = FinalLayer(model_channels, out_channels)
+        self.encoder_blocks = nn.ModuleList([
+            Block(encoder_embed_dim, encoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
+                  proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
+        self.encoder_norm = norm_layer(encoder_embed_dim)
 
         self.initialize_weights()
 
     def initialize_weights(self):
-        def _basic_init(module):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-        self.apply(_basic_init)
+        # parameters
+        torch.nn.init.normal_(self.class_emb.weight, std=.02)
+        torch.nn.init.normal_(self.fake_latent, std=.02)
+        torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
 
-        # Initialize timestep embedding MLP
-        nn.init.normal_(self.time_embed.mlp[0].weight, std=0.02)
-        nn.init.normal_(self.time_embed.mlp[2].weight, std=0.02)
+        # initialize nn.Linear and nn.LayerNorm
+        self.apply(self._init_weights)
 
-        # Zero-out adaLN modulation layers
-        for block in self.res_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            # we use xavier_uniform following official JAX ViT:
+            torch.nn.init.xavier_uniform_(m.weight)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+            if m.weight is not None:
+                nn.init.constant_(m.weight, 1.0)
 
-        # Zero-out output layers
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_layer.linear.weight, 0)
-        nn.init.constant_(self.final_layer.linear.bias, 0)
+    def forward(self, x, mask, class_embedding):
+        x = self.z_proj(x)
+        bsz, seq_len, embed_dim = x.shape
 
-    def forward(self, x, t, c):
-        """
-        Apply the model to an input batch.
-        :param x: an [N x C] Tensor of inputs.
-        :param t: a 1-D batch of timesteps.
-        :param c: conditioning from AR transformer.
-        :return: an [N x C] Tensor of outputs.
-        """
-        x = self.input_proj(x)
-        t = self.time_embed(t)
-        c = self.cond_embed(c)
+        # concat buffer
+        x = torch.cat([torch.zeros(bsz, self.buffer_size, embed_dim, device=x.device), x], dim=1)
+        mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
 
-        y = t + c
+        # random drop class embedding during training
+        if self.training:
+            drop_latent_mask = torch.rand(bsz) < self.label_drop_prob
+            drop_latent_mask = drop_latent_mask.unsqueeze(-1).cuda().to(x.dtype)
+            class_embedding = drop_latent_mask * self.fake_latent + (1 - drop_latent_mask) * class_embedding
 
+        x[:, :self.buffer_size] = class_embedding.unsqueeze(1)
+
+        # encoder position embedding
+        x = x + self.encoder_pos_embed_learned
+        x = self.z_proj_ln(x)
+
+        # FIXME 生成时使用 dropping
+        if not self.training:
+            x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
+
+        # apply Transformer blocks
         if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.res_blocks:
-                x = checkpoint(block, x, y)
+            for block in self.encoder_blocks:
+                x = checkpoint(block, x)
         else:
-            for block in self.res_blocks:
-                x = block(x, y)
+            for block in self.encoder_blocks:
+                x = block(x, )
+        x = self.encoder_norm(x)
+        x = x[:, self.buffer_size-1:]  # FIXME 去掉 buffer
 
-        return self.final_layer(x, y)
+        return x
 
-    def forward_with_cfg(self, x, t, c, cfg_scale):
-        half = x[: len(x) // 2]
-        combined = torch.cat([half, half], dim=0)
-        model_out = self.forward(combined, t, c)
-        eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
-        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
-        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
-        eps = torch.cat([half_eps, half_eps], dim=0)
-        return torch.cat([eps, rest], dim=1)
+    # def forward_with_cfg(self, x, t, c, cfg_scale):
+    #     half = x[: len(x) // 2]
+    #     combined = torch.cat([half, half], dim=0)
+    #     model_out = self.forward(combined, t, c)
+    #     eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
+    #     cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
+    #     half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+    #     eps = torch.cat([half_eps, half_eps], dim=0)
+    #     return torch.cat([eps, rest], dim=1)
