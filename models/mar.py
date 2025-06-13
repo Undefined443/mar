@@ -221,9 +221,6 @@ class MAR(nn.Module):
             # mae encoder
             z = self.forward_mae_encoder(tokens, mask, class_embedding)
 
-            # mae decoder
-            # z = self.forward_mae_decoder(x, mask)
-
             # mask ratio for the next round, following MaskGIT and MAGE.
             mask_ratio = np.cos(math.pi / 2. * (step + 1) / num_iter)
             mask_len = torch.Tensor([np.floor(self.seq_len * mask_ratio)]).cuda()
