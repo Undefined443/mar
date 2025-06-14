@@ -730,7 +730,7 @@ class GaussianDiffusion:
                  Some mean or variance settings may also have other keys.
         """
         if noise is None:
-            noise = th.randn_like(x_start[cls_len:])            # 对 cls 后面的 token 加噪
+            noise = th.randn_like(x_start[cls_len:])            # 对 cls 后面的 x token 加噪
         x_t = self.q_sample(x_start[cls_len:], t, noise=noise)  # 加噪
 
         terms = {}
