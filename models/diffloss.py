@@ -177,6 +177,12 @@ class CausalAttention(nn.Module):
                   proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
         self.encoder_norm = norm_layer(encoder_embed_dim)
 
+        self.t_embedder = TimestepEmbedder(encoder_embed_dim)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(encoder_embed_dim, 6 * encoder_embed_dim, bias=True)
+        )
+
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -200,14 +206,23 @@ class CausalAttention(nn.Module):
             if m.weight is not None:
                 nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, x, mask, class_embedding):
+    def forward(self, x, t, class_embedding):
+        """
+        对 [cls, x, x_t] 序列进行去噪
+
+        :param x: 由 x 和 x_t 拼接而成的序列
+        :param t: 时间步
+        :param class_embedding: 类别嵌入
+        :return: 去噪后的 x
+        """
         x = self.z_proj(x)
+        t = self.t_embedder(t)
         bsz, seq_len, embed_dim = x.shape
         seq_len /= 2  # 将 x 和 x_t 分开
 
         # concat buffer
         x = torch.cat([torch.zeros(bsz, self.buffer_size, embed_dim, device=x.device), x], dim=1)
-        mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
+        # mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
 
         # random drop class embedding during training
         if self.training:
@@ -222,12 +237,13 @@ class CausalAttention(nn.Module):
         x = self.z_proj_ln(x)
 
         # FIXME 生成时使用 dropping
-        if not self.training:
-            x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
+        # if not self.training:
+        #     x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
 
         # apply Transformer blocks
         attn_mask = create_mask(self.buffer_size, seq_len)
         for block in self.encoder_blocks:
+            shift, scale = self.adaLN_modulation(t).chunk(2, dim=-1)
             x = block(x, attn_mask=attn_mask)
         x = self.encoder_norm(x)
         x = x[:, self.buffer_size-1:]  # FIXME 去掉 buffer
