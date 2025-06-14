@@ -716,7 +716,7 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, x_start, t, cls_len, model_kwargs=None, noise=None):
+    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
         """
         Compute training losses for a single timestep.
         :param model: the model to evaluate loss on.
@@ -730,8 +730,8 @@ class GaussianDiffusion:
                  Some mean or variance settings may also have other keys.
         """
         if noise is None:
-            noise = th.randn_like(x_start[cls_len:])            # 对 cls 后面的 x token 加噪
-        x_t = self.q_sample(x_start[cls_len:], t, noise=noise)  # 加噪
+            noise = th.randn_like(x_start)
+        x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {}
 

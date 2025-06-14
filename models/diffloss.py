@@ -203,6 +203,7 @@ class CausalAttention(nn.Module):
     def forward(self, x, mask, class_embedding):
         x = self.z_proj(x)
         bsz, seq_len, embed_dim = x.shape
+        seq_len /= 2  # 将 x 和 x_t 分开
 
         # concat buffer
         x = torch.cat([torch.zeros(bsz, self.buffer_size, embed_dim, device=x.device), x], dim=1)
@@ -225,12 +226,9 @@ class CausalAttention(nn.Module):
             x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
 
         # apply Transformer blocks
-        if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.encoder_blocks:
-                x = checkpoint(block, x)
-        else:
-            for block in self.encoder_blocks:
-                x = block(x, )
+        attn_mask = create_mask(self.buffer_size, seq_len)
+        for block in self.encoder_blocks:
+            x = block(x, attn_mask=attn_mask)
         x = self.encoder_norm(x)
         x = x[:, self.buffer_size-1:]  # FIXME 去掉 buffer
 
@@ -245,3 +243,11 @@ class CausalAttention(nn.Module):
     #     half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
     #     eps = torch.cat([half_eps, half_eps], dim=0)
     #     return torch.cat([eps, rest], dim=1)
+
+
+def create_mask(cls_len, tok_len):
+    mask = torch.ones(cls_len+2*tok_len, cls_len+2*tok_len)
+    mask[:, :cls_len] = 0
+    mask[cls_len:cls_len+tok_len, cls_len:cls_len+tok_len] = torch.triu(torch.ones(tok_len, tok_len), diagonal=1)
+    mask[cls_len+tok_len:, cls_len-1:cls_len+tok_len-1] = torch.triu(torch.ones(tok_len, tok_len), diagonal=1)
+    return mask
