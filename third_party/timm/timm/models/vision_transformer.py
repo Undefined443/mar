@@ -87,7 +87,6 @@ class Attention(nn.Module):
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
 
-        assert self.fused_attn, "Expected fused_attn to be True"
         if self.fused_attn:
             x = F.scaled_dot_product_attention(
                 q, k, v,
