@@ -732,20 +732,20 @@ class GaussianDiffusion:
         if noise is None:
             noise = th.randn_like(x_start)
         x_t = self.q_sample(x_start, t, noise=noise)
+        model_kwargs["x_start"] = x_start
 
         terms = {}
 
         if self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_input = th.cat([x_start, x_t], dim=1)
-            model_output = model(model_input, t, **model_kwargs)  # 模型输出
+            model_output = model(x_t, t, **model_kwargs)  # 模型输出
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,
                 ModelVarType.LEARNED_RANGE,
             ]:
-                B, C = x_t.shape[:2]
-                assert model_output.shape == (B, C * 2, *x_t.shape[2:])
-                model_output, model_var_values = th.split(model_output, C, dim=1)
+                B, N, C = x_t.shape
+                assert model_output.shape == (B, N, C * 2)
+                model_output, model_var_values = th.split(model_output, C, dim=2)
                 # Learn the variance using the variational bound, but don't let
                 # it affect our mean prediction.
                 frozen_out = th.cat([model_output.detach(), model_var_values], dim=1)
@@ -776,13 +776,6 @@ class GaussianDiffusion:
                 terms["loss"] = terms["mse"]
         else:
             raise NotImplementedError(self.loss_type)
-        
-        t_epsilon = target[:255, :]
-        t_x_t = x_t[:255, :]
-        t_x_pred = t_x_t - t_epsilon
-        th.save(t_epsilon, "t_epsilon.pt")
-        th.save(t_x_t, "t_x_t.pt")
-        th.save(t_x_pred, "t_x_pred.pt")
 
         return terms
 

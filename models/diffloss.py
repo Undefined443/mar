@@ -11,7 +11,7 @@ from timm.models.vision_transformer import Block
 class DiffLoss(nn.Module):
     """Diffusion Loss"""
     def __init__(self, target_channels, z_channels, depth, width, num_sampling_steps, grad_checkpointing=False):
-        super(DiffLoss, self).__init__()
+        super().__init__()
         self.in_channels = target_channels
         self.net = CausalAttention(
             in_channels=target_channels,
@@ -25,13 +25,11 @@ class DiffLoss(nn.Module):
         self.train_diffusion = create_diffusion(timestep_respacing="", noise_schedule="cosine")
         self.gen_diffusion = create_diffusion(timestep_respacing=num_sampling_steps, noise_schedule="cosine")
 
-    def forward(self, target, z, mask=None):
-        t = torch.randint(0, self.train_diffusion.num_timesteps, (target.shape[0],), device=target.device)
-        model_kwargs = dict(c=z)
-        loss_dict = self.train_diffusion.training_losses(self.net, target, t, model_kwargs)
+    def forward(self, x, class_embedding):
+        t = torch.randint(0, self.train_diffusion.num_timesteps, (x.shape[0],), device=x.device)
+        model_kwargs = dict(class_embedding=class_embedding)
+        loss_dict = self.train_diffusion.training_losses(self.net, x, t, model_kwargs)
         loss = loss_dict["loss"]
-        if mask is not None:
-            loss = (loss * mask).sum() / mask.sum()
         return loss.mean()
 
     def sample(self, z, temperature=1.0, cfg=1.0):
@@ -120,9 +118,15 @@ class FinalLayer(nn.Module):
 
 class CausalAttention(nn.Module):
     """
-    由 MAE Encoder 修改而来
+    由 MAE Encoder 和 SimpleMLPAdaLN 修改而来
     """
-    def __init__(self, img_size=256, vae_stride=16, patch_size=1,
+    def __init__(self, 
+                 in_channels,
+                 model_channels,
+                 out_channels,
+                 z_channels,
+                 num_res_blocks,
+                 img_size=256, vae_stride=16, patch_size=1,
                  encoder_embed_dim=1024, encoder_depth=16, encoder_num_heads=16,
                  decoder_embed_dim=1024, decoder_depth=16, decoder_num_heads=16,
                  mlp_ratio=4., norm_layer=nn.LayerNorm,
@@ -141,6 +145,18 @@ class CausalAttention(nn.Module):
                  ):
         super().__init__()
 
+        self.in_channels = in_channels
+        self.model_channels = model_channels
+        self.out_channels = out_channels
+        self.num_res_blocks = num_res_blocks
+
+        # self.time_embed = TimestepEmbedder(model_channels)
+        # self.cond_embed = nn.Linear(z_channels, model_channels)
+
+        # self.input_proj = nn.Linear(in_channels, model_channels)
+
+        # self.final_layer = FinalLayer(model_channels, out_channels)
+
         # --------------------------------------------------------------------------
         # VAE and patchify specifics
         self.vae_embed_dim = vae_embed_dim
@@ -155,22 +171,29 @@ class CausalAttention(nn.Module):
 
         # --------------------------------------------------------------------------
         # Class Embedding
-        self.num_classes = class_num
-        self.class_emb = nn.Embedding(class_num, encoder_embed_dim)
+        # self.num_classes = class_num
+        # self.class_emb = nn.Embedding(class_num, encoder_embed_dim)
         self.label_drop_prob = label_drop_prob
         # Fake class embedding for CFG's unconditional generation
         self.fake_latent = nn.Parameter(torch.zeros(1, encoder_embed_dim))
 
         # --------------------------------------------------------------------------
         # MAR variant masking ratio, a left-half truncated Gaussian centered at 100% masking ratio with std 0.25
-        self.mask_ratio_generator = stats.truncnorm((mask_ratio_min - 1.0) / 0.25, 0, loc=1.0, scale=0.25)
+        # self.mask_ratio_generator = stats.truncnorm((mask_ratio_min - 1.0) / 0.25, 0, loc=1.0, scale=0.25)
 
         # --------------------------------------------------------------------------
         # MAR encoder specifics
-        self.z_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
-        self.z_proj_ln = nn.LayerNorm(encoder_embed_dim, eps=1e-6)
+        self.x_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
+        self.x_start_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
+        self.x_proj_ln = nn.LayerNorm(encoder_embed_dim, eps=1e-6)
+        # self.final_layer = FinalLayer(encoder_embed_dim, encoder_embed_dim)
+        self.final_layer = nn.Sequential(
+            nn.Linear(encoder_embed_dim, encoder_embed_dim, bias=True),
+            nn.SiLU(),
+            nn.Linear(encoder_embed_dim, 2 * self.token_embed_dim, bias=True)
+        )
         self.buffer_size = buffer_size
-        self.encoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, encoder_embed_dim))
+        # self.encoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, encoder_embed_dim))
 
         self.encoder_blocks = nn.ModuleList([
             Block(encoder_embed_dim, encoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
@@ -178,18 +201,18 @@ class CausalAttention(nn.Module):
         self.encoder_norm = norm_layer(encoder_embed_dim)
 
         self.t_embedder = TimestepEmbedder(encoder_embed_dim)
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(encoder_embed_dim, 6 * encoder_embed_dim, bias=True)
-        )
+        # self.adaLN_modulation = nn.Sequential(
+        #     nn.SiLU(),
+        #     nn.Linear(encoder_embed_dim, 6 * encoder_embed_dim, bias=True)
+        # )
 
         self.initialize_weights()
 
     def initialize_weights(self):
         # parameters
-        torch.nn.init.normal_(self.class_emb.weight, std=.02)
+        # torch.nn.init.normal_(self.class_emb.weight, std=.02)
         torch.nn.init.normal_(self.fake_latent, std=.02)
-        torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
+        # torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
 
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
@@ -206,23 +229,20 @@ class CausalAttention(nn.Module):
             if m.weight is not None:
                 nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, x, t, class_embedding):
+    def forward(self, x, t, class_embedding, x_start):
         """
         对 [cls, x, x_t] 序列进行去噪
 
-        :param x: 由 x 和 x_t 拼接而成的序列
+        :param x: x_start 加噪得到的 x_t
         :param t: 时间步
         :param class_embedding: 类别嵌入
+        :param x_start: 未加噪的 x
         :return: 去噪后的 x
         """
-        x = self.z_proj(x)
+        x = self.x_proj(x)
+        x_start = self.x_start_proj(x_start)
         t = self.t_embedder(t)
         bsz, seq_len, embed_dim = x.shape
-        seq_len /= 2  # 将 x 和 x_t 分开
-
-        # concat buffer
-        x = torch.cat([torch.zeros(bsz, self.buffer_size, embed_dim, device=x.device), x], dim=1)
-        # mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
 
         # random drop class embedding during training
         if self.training:
@@ -230,23 +250,21 @@ class CausalAttention(nn.Module):
             drop_latent_mask = drop_latent_mask.unsqueeze(-1).cuda().to(x.dtype)
             class_embedding = drop_latent_mask * self.fake_latent + (1 - drop_latent_mask) * class_embedding
 
+        class_embedding = class_embedding + t  # 将时间步信息融入类别嵌入
+        x = torch.cat([torch.zeros(bsz, self.buffer_size, embed_dim, device=x.device), x_start, x], dim=1)
         x[:, :self.buffer_size] = class_embedding.unsqueeze(1)
 
         # encoder position embedding
-        x = x + self.encoder_pos_embed_learned
-        x = self.z_proj_ln(x)
-
-        # FIXME 生成时使用 dropping
-        # if not self.training:
-        #     x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
+        x = x + TimestepEmbedder.timestep_embedding(torch.arange(x.shape[1], device=x.device), embed_dim)
+        x = self.x_proj_ln(x)
 
         # apply Transformer blocks
-        attn_mask = create_mask(self.buffer_size, seq_len)
+        attn_mask = create_mask(self.buffer_size, seq_len).to(x.device)
         for block in self.encoder_blocks:
-            shift, scale = self.adaLN_modulation(t).chunk(2, dim=-1)
             x = block(x, attn_mask=attn_mask)
         x = self.encoder_norm(x)
-        x = x[:, self.buffer_size-1:]  # FIXME 去掉 buffer
+        x = x[:, -seq_len:]  # 只保留 x_t
+        x = self.final_layer(x)
 
         return x
 
@@ -262,8 +280,8 @@ class CausalAttention(nn.Module):
 
 
 def create_mask(cls_len, tok_len):
-    mask = torch.ones(cls_len+2*tok_len, cls_len+2*tok_len)
-    mask[:, :cls_len] = 0
-    mask[cls_len:cls_len+tok_len, cls_len:cls_len+tok_len] = torch.triu(torch.ones(tok_len, tok_len), diagonal=1)
-    mask[cls_len+tok_len:, cls_len-1:cls_len+tok_len-1] = torch.triu(torch.ones(tok_len, tok_len), diagonal=1)
+    mask = torch.ones(cls_len+2*tok_len, cls_len+2*tok_len).bool()
+    mask[:, :cls_len] = False
+    mask[cls_len:cls_len+tok_len, cls_len:cls_len+tok_len] = torch.triu(torch.ones(tok_len, tok_len), diagonal=1).bool()
+    mask[cls_len+tok_len:, cls_len-1:cls_len+tok_len-1] = torch.triu(torch.ones(tok_len, tok_len), diagonal=1).bool()
     return mask

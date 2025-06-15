@@ -59,7 +59,7 @@ class MAR(nn.Module):
         self.class_emb = nn.Embedding(class_num, encoder_embed_dim)
         self.label_drop_prob = label_drop_prob
         # Fake class embedding for CFG's unconditional generation
-        self.fake_latent = nn.Parameter(torch.zeros(1, encoder_embed_dim))
+        # self.fake_latent = nn.Parameter(torch.zeros(1, encoder_embed_dim))
 
         # --------------------------------------------------------------------------
         # MAR variant masking ratio, a left-half truncated Gaussian centered at 100% masking ratio with std 0.25
@@ -67,15 +67,15 @@ class MAR(nn.Module):
 
         # --------------------------------------------------------------------------
         # MAR encoder specifics
-        self.z_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
-        self.z_proj_ln = nn.LayerNorm(encoder_embed_dim, eps=1e-6)
-        self.buffer_size = buffer_size
-        self.encoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, encoder_embed_dim))
+        # self.z_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
+        # self.z_proj_ln = nn.LayerNorm(encoder_embed_dim, eps=1e-6)
+        # self.buffer_size = buffer_size
+        # self.encoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, encoder_embed_dim))
 
-        self.encoder_blocks = nn.ModuleList([
-            Block(encoder_embed_dim, encoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
-                  proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
-        self.encoder_norm = norm_layer(encoder_embed_dim)
+        # self.encoder_blocks = nn.ModuleList([
+        #     Block(encoder_embed_dim, encoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
+        #           proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
+        # self.encoder_norm = norm_layer(encoder_embed_dim)
 
         self.initialize_weights()
 
@@ -94,8 +94,8 @@ class MAR(nn.Module):
     def initialize_weights(self):
         # parameters
         torch.nn.init.normal_(self.class_emb.weight, std=.02)
-        torch.nn.init.normal_(self.fake_latent, std=.02)
-        torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
+        # torch.nn.init.normal_(self.fake_latent, std=.02)
+        # torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
 
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
@@ -153,23 +153,7 @@ class MAR(nn.Module):
         #                      src=torch.ones(bsz, seq_len, device=x.device))
         return mask
 
-    def forward_loss(self, z, target, mask):
-        bsz, seq_len, _ = target.shape
-        z = z[:, :-1, :]
-        target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
-        z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
-        mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
-        loss = self.diffloss(z=z, target=target, mask=mask)
-        return loss
-
     def forward(self, imgs, labels):
-
-        # class embed
-        class_embedding = self.class_emb(labels)
-
-        # patchify and mask (drop) tokens
-        x = self.patchify(imgs)
-        gt_latents = x.clone().detach()
         if False:
             t_x_pred = torch.load("t_x_pred.pt")
             head = gt_latents[0, 0, :].unsqueeze(0)
@@ -178,18 +162,13 @@ class MAR(nn.Module):
             torch.save(unpatchified, "t_x_pred.pt")
             _gt_latents = self.unpatchify(gt_latents)
             torch.save(_gt_latents, "gt_latents.pt")
-        bsz, seq_len, embed_dim = x.shape
-        mask = torch.ones(bsz, seq_len, device=x.device)
 
-        # mae encoder
-        z = self.forward_mae_encoder(x, mask, class_embedding)
+        x = self.patchify(imgs)
+        class_embedding = self.class_emb(labels)
 
-        # mae decoder
-        # z = self.forward_mae_decoder(x, mask)
-
-        # diffloss
-        loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
-
+        x = x.repeat(self.diffusion_batch_mul, 1, 1)
+        class_embedding = class_embedding.repeat(self.diffusion_batch_mul, 1)
+        loss = self.diffloss(x, class_embedding)
         return loss
 
     def sample_tokens(self, bsz, num_iter=64, cfg=1.0, cfg_schedule="linear", labels=None, temperature=1.0, progress=True):
@@ -211,11 +190,11 @@ class MAR(nn.Module):
             # class embedding and CFG
             if labels is not None:
                 class_embedding = self.class_emb(labels)
-            else:
-                class_embedding = self.fake_latent.repeat(bsz, 1)
+            # else:
+                # class_embedding = self.fake_latent.repeat(bsz, 1)
             if not cfg == 1.0:
                 tokens = torch.cat([tokens, tokens], dim=0)
-                class_embedding = torch.cat([class_embedding, self.fake_latent.repeat(bsz, 1)], dim=0)
+                # class_embedding = torch.cat([class_embedding, self.fake_latent.repeat(bsz, 1)], dim=0)
                 mask = torch.cat([mask, mask], dim=0)
 
             # mae encoder
