@@ -1,0 +1,93 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "train-L",
+      "type": "shell",
+      "command": "torchrun",
+      "args": [
+        "--nproc_per_node=1",
+        "--master_port=12601",
+        "main_mar.py",
+        "--img_size=256",
+        "--vae_path=pretrained_models/vae/kl16.ckpt",
+        "--vae_embed_dim=16",
+        "--vae_stride=16",
+        "--patch_size=1",
+        "--model=mar_large",
+        "--diffloss_d=3",
+        "--diffloss_w=1024",
+        "--epochs=400",
+        "--warmup_epochs=100",
+        "--batch_size=64",
+        "--blr=1.0e-4",
+        "--diffusion_batch_mul=4",
+        "--output_dir=output",
+        "--data_path=data",
+        "--resume=output",
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "CUDA_VISIBLE_DEVICES": "2"
+        }
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "evaluate-L",
+      "type": "shell",
+      "command": "torchrun",
+      "args": [
+        "--nproc_per_node=1",
+        "main_mar.py",
+        "--model=mar_large",
+        "--diffloss_d=3",
+        "--diffloss_w=1024",
+        "--eval_bsz=256",
+        "--num_images=1000",
+        "--num_iter=256",
+        "--num_sampling_steps=100",
+        "--cfg=3.0",
+        "--cfg_schedule=linear",
+        "--temperature=1.0",
+        "--output_dir=output/no_shuffle_order",
+        "--resume=output/no_shuffle_order",
+        "--data_path=data",
+        "--evaluate"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "CUDA_VISIBLE_DEVICES": "3",
+          "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+          "https_proxy": "http://127.0.0.1:6154",
+          "no_proxy": "localhost,127.0.0.1,::1"
+        }
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "tensorboard",
+      "type": "shell",
+      "command": "tensorboard",
+      "args": [
+        "--logdir=output",
+        "--host=222.200.185.68"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    }
+  ]
+}
