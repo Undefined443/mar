@@ -10,8 +10,12 @@ from torch.utils.checkpoint import checkpoint
 
 from timm.models.vision_transformer import Block
 
-from models.diffloss import DiffLoss
 
+def mean_flat(tensor):
+    """
+    Take the mean over all non-batch dimensions.
+    """
+    return tensor.mean(dim=list(range(0, len(tensor.shape))))
 
 def mask_by_order(mask_len, order, bsz, seq_len):
     masking = torch.zeros(bsz, seq_len).cuda()
@@ -77,41 +81,16 @@ class MAR(nn.Module):
                   proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
         self.encoder_norm = norm_layer(encoder_embed_dim)
 
-        # --------------------------------------------------------------------------
-        # MAR decoder specifics
-        # self.decoder_embed = nn.Linear(encoder_embed_dim, decoder_embed_dim, bias=True)
-        # self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
-        # self.decoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, decoder_embed_dim))
-
-        # self.decoder_blocks = nn.ModuleList([
-        #     Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
-        #           proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(decoder_depth)])
-
-        # self.decoder_norm = norm_layer(decoder_embed_dim)
-        # self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
+        self.final_layer = nn.Linear(encoder_embed_dim, self.token_embed_dim, bias=True)
 
         self.initialize_weights()
 
-        # --------------------------------------------------------------------------
-        # Diffusion Loss
-        # self.diffloss = DiffLoss(
-        #     target_channels=self.token_embed_dim,
-        #     z_channels=decoder_embed_dim,
-        #     width=diffloss_w,
-        #     depth=diffloss_d,
-        #     num_sampling_steps=num_sampling_steps,
-        #     grad_checkpointing=grad_checkpointing
-        # )
-        # self.diffusion_batch_mul = diffusion_batch_mul
 
     def initialize_weights(self):
         # parameters
         torch.nn.init.normal_(self.class_emb.weight, std=.02)
         torch.nn.init.normal_(self.fake_latent, std=.02)
-        # torch.nn.init.normal_(self.mask_token, std=.02)
         torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
-        # torch.nn.init.normal_(self.decoder_pos_embed_learned, std=.02)
-        # torch.nn.init.normal_(self.diffusion_pos_embed_learned, std=.02)
 
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
@@ -245,31 +224,22 @@ class MAR(nn.Module):
         z = z[:, :-1, :]
         z = z.reshape(bsz * seq_len, -1)
         target = target.reshape(bsz * seq_len, -1)
-        B, C = z.shape[:2]
-        loss = self.diffloss(z=z, target=target, mask=mask)
+        loss = mean_flat((target - z) ** 2)
         return loss
 
     def forward(self, imgs, labels):
-
         # class embed
         class_embedding = self.class_emb(labels)
 
         # patchify and mask (drop) tokens
         x = self.patchify(imgs)
         gt_latents = x.clone().detach()
-        if False:
-            t_x_pred = torch.load("t_x_pred.pt")
-            head = gt_latents[0, 0, :].unsqueeze(0)
-            patched = torch.cat([head, t_x_pred], dim=0).unsqueeze(0)
-            unpatchified = self.unpatchify(patched)
-            torch.save(unpatchified, "t_x_pred.pt")
-            _gt_latents = self.unpatchify(gt_latents)
-            torch.save(_gt_latents, "gt_latents.pt")
         bsz, seq_len, embed_dim = x.shape
         mask = torch.ones(bsz, seq_len, device=x.device)
 
         # mae encoder
         z = self.forward_mae_encoder(x, mask, class_embedding)
+        z = self.final_layer(z)
 
         # diffloss
         loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
