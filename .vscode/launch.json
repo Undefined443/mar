@@ -15,7 +15,7 @@
         "--vae_embed_dim=16",
         "--vae_stride=16",
         "--patch_size=1",
-        "--model=mar_base",
+        "--model=mar_large",
         "--diffloss_d=3",
         "--diffloss_w=1024",
         "--epochs=400",
