@@ -94,15 +94,15 @@ class MAR(nn.Module):
 
         # --------------------------------------------------------------------------
         # Diffusion Loss
-        self.diffloss = DiffLoss(
-            target_channels=self.token_embed_dim,
-            z_channels=decoder_embed_dim,
-            width=diffloss_w,
-            depth=diffloss_d,
-            num_sampling_steps=num_sampling_steps,
-            grad_checkpointing=grad_checkpointing
-        )
-        self.diffusion_batch_mul = diffusion_batch_mul
+        # self.diffloss = DiffLoss(
+        #     target_channels=self.token_embed_dim,
+        #     z_channels=decoder_embed_dim,
+        #     width=diffloss_w,
+        #     depth=diffloss_d,
+        #     num_sampling_steps=num_sampling_steps,
+        #     grad_checkpointing=grad_checkpointing
+        # )
+        # self.diffusion_batch_mul = diffusion_batch_mul
 
     def initialize_weights(self):
         # parameters
@@ -231,12 +231,21 @@ class MAR(nn.Module):
         x = x + self.diffusion_pos_embed_learned
         return x
 
+    # def forward_loss(self, z, target, mask):
+    #     bsz, seq_len, _ = target.shape
+    #     z = z[:, :-1, :]
+    #     target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
+    #     z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
+    #     mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
+    #     loss = self.diffloss(z=z, target=target, mask=mask)
+    #     return loss
+
     def forward_loss(self, z, target, mask):
         bsz, seq_len, _ = target.shape
         z = z[:, :-1, :]
-        target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
-        z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
-        mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
+        z = z.reshape(bsz * seq_len, -1)
+        target = target.reshape(bsz * seq_len, -1)
+        B, C = z.shape[:2]
         loss = self.diffloss(z=z, target=target, mask=mask)
         return loss
 
@@ -261,9 +270,6 @@ class MAR(nn.Module):
 
         # mae encoder
         z = self.forward_mae_encoder(x, mask, class_embedding)
-
-        # mae decoder
-        # z = self.forward_mae_decoder(x, mask)
 
         # diffloss
         loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
@@ -296,11 +302,7 @@ class MAR(nn.Module):
                 class_embedding = torch.cat([class_embedding, self.fake_latent.repeat(bsz, 1)], dim=0)
                 mask = torch.cat([mask, mask], dim=0)
 
-            # mae encoder
             z = self.forward_mae_encoder(tokens, mask, class_embedding)
-
-            # mae decoder
-            # z = self.forward_mae_decoder(x, mask)
 
             # mask ratio for the next round, following MaskGIT and MAGE.
             mask_ratio = np.cos(math.pi / 2. * (step + 1) / num_iter)
