@@ -26,7 +26,6 @@
         "--cached_path=cache",
         "--use_cached"
       ],
-      "cwd": "${workspaceFolder}",
       "env": {
         "CUDA_VISIBLE_DEVICES": "3",
         "TORCH_DISTRIBUTED_DEBUG": "INFO"
@@ -56,7 +55,6 @@
         "--data_path=data",
         "--evaluate",
       ],
-      "cwd": "${workspaceFolder}",
       "env": {
         "CUDA_VISIBLE_DEVICES": "3"
       }
