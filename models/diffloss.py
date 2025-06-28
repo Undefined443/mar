@@ -142,20 +142,13 @@ class CausalAttention(nn.Module):
                  num_sampling_steps='100',
                  diffusion_batch_mul=4,
                  grad_checkpointing=False,
-                 ):
+            ):
         super().__init__()
 
         self.in_channels = in_channels
         self.model_channels = model_channels
         self.out_channels = out_channels
         self.num_res_blocks = num_res_blocks
-
-        # self.time_embed = TimestepEmbedder(model_channels)
-        # self.cond_embed = nn.Linear(z_channels, model_channels)
-
-        # self.input_proj = nn.Linear(in_channels, model_channels)
-
-        # self.final_layer = FinalLayer(model_channels, out_channels)
 
         # --------------------------------------------------------------------------
         # VAE and patchify specifics
@@ -168,25 +161,11 @@ class CausalAttention(nn.Module):
         self.seq_len = self.seq_h * self.seq_w
         self.token_embed_dim = vae_embed_dim * patch_size**2
         self.grad_checkpointing = grad_checkpointing
-
-        # --------------------------------------------------------------------------
-        # Class Embedding
-        # self.num_classes = class_num
-        # self.class_emb = nn.Embedding(class_num, encoder_embed_dim)
         self.label_drop_prob = label_drop_prob
-        # Fake class embedding for CFG's unconditional generation
         self.fake_latent = nn.Parameter(torch.zeros(1, encoder_embed_dim))
-
-        # --------------------------------------------------------------------------
-        # MAR variant masking ratio, a left-half truncated Gaussian centered at 100% masking ratio with std 0.25
-        # self.mask_ratio_generator = stats.truncnorm((mask_ratio_min - 1.0) / 0.25, 0, loc=1.0, scale=0.25)
-
-        # --------------------------------------------------------------------------
-        # MAR encoder specifics
         self.x_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
         self.x_start_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
         self.x_proj_ln = nn.LayerNorm(encoder_embed_dim, eps=1e-6)
-        # self.final_layer = FinalLayer(encoder_embed_dim, encoder_embed_dim)
         self.final_layer = nn.Sequential(
             nn.Linear(encoder_embed_dim, encoder_embed_dim, bias=True),
             nn.SiLU(),
@@ -210,9 +189,7 @@ class CausalAttention(nn.Module):
 
     def initialize_weights(self):
         # parameters
-        # torch.nn.init.normal_(self.class_emb.weight, std=.02)
         torch.nn.init.normal_(self.fake_latent, std=.02)
-        # torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
 
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
@@ -255,7 +232,8 @@ class CausalAttention(nn.Module):
         x[:, :self.buffer_size] = class_embedding.unsqueeze(1)
 
         # encoder position embedding
-        x = x + TimestepEmbedder.timestep_embedding(torch.arange(x.shape[1], device=x.device), embed_dim)
+        pos_embed = TimestepEmbedder.timestep_embedding(torch.arange(x.shape[1], device=x.device), embed_dim)
+        x = x + pos_embed
         x = self.x_proj_ln(x)
 
         # apply Transformer blocks

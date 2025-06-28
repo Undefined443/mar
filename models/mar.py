@@ -6,9 +6,6 @@ import scipy.stats as stats
 import math
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
-
-from timm.models.vision_transformer import Block
 
 from models.diffloss import DiffLoss
 
@@ -58,24 +55,10 @@ class MAR(nn.Module):
         self.num_classes = class_num
         self.class_emb = nn.Embedding(class_num, encoder_embed_dim)
         self.label_drop_prob = label_drop_prob
-        # Fake class embedding for CFG's unconditional generation
-        # self.fake_latent = nn.Parameter(torch.zeros(1, encoder_embed_dim))
 
         # --------------------------------------------------------------------------
         # MAR variant masking ratio, a left-half truncated Gaussian centered at 100% masking ratio with std 0.25
         self.mask_ratio_generator = stats.truncnorm((mask_ratio_min - 1.0) / 0.25, 0, loc=1.0, scale=0.25)
-
-        # --------------------------------------------------------------------------
-        # MAR encoder specifics
-        # self.z_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
-        # self.z_proj_ln = nn.LayerNorm(encoder_embed_dim, eps=1e-6)
-        # self.buffer_size = buffer_size
-        # self.encoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, encoder_embed_dim))
-
-        # self.encoder_blocks = nn.ModuleList([
-        #     Block(encoder_embed_dim, encoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
-        #           proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
-        # self.encoder_norm = norm_layer(encoder_embed_dim)
 
         self.initialize_weights()
 
@@ -94,9 +77,6 @@ class MAR(nn.Module):
     def initialize_weights(self):
         # parameters
         torch.nn.init.normal_(self.class_emb.weight, std=.02)
-        # torch.nn.init.normal_(self.fake_latent, std=.02)
-        # torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
-
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
 
@@ -146,23 +126,10 @@ class MAR(nn.Module):
     def random_masking(self, x, orders):
         # generate token mask
         bsz, seq_len, embed_dim = x.shape
-        # mask_rate = self.mask_ratio_generator.rvs(1)[0]
-        # num_masked_tokens = int(np.ceil(seq_len * mask_rate))
         mask = torch.ones(bsz, seq_len, device=x.device)
-        # mask = torch.scatter(mask, dim=-1, index=orders[:, :num_masked_tokens],
-        #                      src=torch.ones(bsz, seq_len, device=x.device))
         return mask
 
     def forward(self, imgs, labels):
-        if False:
-            t_x_pred = torch.load("t_x_pred.pt")
-            head = gt_latents[0, 0, :].unsqueeze(0)
-            patched = torch.cat([head, t_x_pred], dim=0).unsqueeze(0)
-            unpatchified = self.unpatchify(patched)
-            torch.save(unpatchified, "t_x_pred.pt")
-            _gt_latents = self.unpatchify(gt_latents)
-            torch.save(_gt_latents, "gt_latents.pt")
-
         x = self.patchify(imgs)
         class_embedding = self.class_emb(labels)
 
@@ -177,8 +144,6 @@ class MAR(nn.Module):
         mask = torch.ones(bsz, self.seq_len).cuda()
         tokens = torch.zeros(bsz, self.seq_len, self.token_embed_dim).cuda()
         orders = self.sample_orders(bsz)
-        # buffer_mask = torch.zeros(bsz, self.buffer_size).cuda()
-        # mask = torch.concat([buffer_mask, mask], dim=1)
 
         indices = list(range(num_iter))
         if progress:
