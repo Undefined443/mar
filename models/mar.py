@@ -77,19 +77,6 @@ class MAR(nn.Module):
                   proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
         self.encoder_norm = norm_layer(encoder_embed_dim)
 
-        # --------------------------------------------------------------------------
-        # MAR decoder specifics
-        # self.decoder_embed = nn.Linear(encoder_embed_dim, decoder_embed_dim, bias=True)
-        # self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
-        # self.decoder_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len + self.buffer_size, decoder_embed_dim))
-
-        # self.decoder_blocks = nn.ModuleList([
-        #     Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
-        #           proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(decoder_depth)])
-
-        # self.decoder_norm = norm_layer(decoder_embed_dim)
-        # self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
-
         self.initialize_weights()
 
         # --------------------------------------------------------------------------
