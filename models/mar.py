@@ -210,15 +210,6 @@ class MAR(nn.Module):
         x = x + self.diffusion_pos_embed_learned
         return x
 
-    # def forward_loss(self, z, target, mask):
-    #     bsz, seq_len, _ = target.shape
-    #     z = z[:, :-1, :]
-    #     target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
-    #     z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
-    #     mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
-    #     loss = self.diffloss(z=z, target=target, mask=mask)
-    #     return loss
-
     def forward_loss(self, z, target, mask):
         bsz, seq_len, _ = target.shape
         z = z[:, :-1, :]
@@ -301,7 +292,8 @@ class MAR(nn.Module):
                 cfg_iter = cfg
             else:
                 raise NotImplementedError
-            sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
+            sampled_token_latent = self.final_layer(z)
+            # sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
             if not cfg == 1.0:
                 sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples
                 mask_to_pred, _ = mask_to_pred.chunk(2, dim=0)
