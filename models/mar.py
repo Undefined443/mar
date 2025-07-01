@@ -95,11 +95,7 @@ class MAR(nn.Module):
         # parameters
         torch.nn.init.normal_(self.class_emb.weight, std=.02)
         torch.nn.init.normal_(self.fake_latent, std=.02)
-        # torch.nn.init.normal_(self.mask_token, std=.02)
         torch.nn.init.normal_(self.encoder_pos_embed_learned, std=.02)
-        # torch.nn.init.normal_(self.decoder_pos_embed_learned, std=.02)
-        # torch.nn.init.normal_(self.diffusion_pos_embed_learned, std=.02)
-
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
 
@@ -149,11 +145,7 @@ class MAR(nn.Module):
     def random_masking(self, x, orders):
         # generate token mask
         bsz, seq_len, embed_dim = x.shape
-        # mask_rate = self.mask_ratio_generator.rvs(1)[0]
-        # num_masked_tokens = int(np.ceil(seq_len * mask_rate))
         mask = torch.ones(bsz, seq_len, device=x.device)
-        # mask = torch.scatter(mask, dim=-1, index=orders[:, :num_masked_tokens],
-        #                      src=torch.ones(bsz, seq_len, device=x.device))
         return mask
 
     def forward_mae_encoder(self, x, mask, class_embedding):
