@@ -192,32 +192,6 @@ class MAR(nn.Module):
 
         return x
 
-    def forward_mae_decoder(self, x, mask):
-
-        x = self.decoder_embed(x)
-        mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
-
-        # pad mask tokens
-        mask_tokens = self.mask_token.repeat(mask_with_buffer.shape[0], mask_with_buffer.shape[1], 1).to(x.dtype)
-        x_after_pad = mask_tokens.clone()
-        x_after_pad[(1 - mask_with_buffer).nonzero(as_tuple=True)] = x.reshape(x.shape[0] * x.shape[1], x.shape[2])
-
-        # decoder position embedding
-        x = x_after_pad + self.decoder_pos_embed_learned
-
-        # apply Transformer blocks
-        if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.decoder_blocks:
-                x = checkpoint(block, x)
-        else:
-            for block in self.decoder_blocks:
-                x = block(x)
-        x = self.decoder_norm(x)
-
-        x = x[:, self.buffer_size:]
-        x = x + self.diffusion_pos_embed_learned
-        return x
-
     def forward_loss(self, z, target, mask):
         bsz, seq_len, _ = target.shape
         z = z[:, :-1, :]
@@ -228,29 +202,17 @@ class MAR(nn.Module):
         return loss
 
     def forward(self, imgs, labels):
-
         # class embed
         class_embedding = self.class_emb(labels)
 
         # patchify and mask (drop) tokens
         x = self.patchify(imgs)
         gt_latents = x.clone().detach()
-        if False:
-            t_x_pred = torch.load("t_x_pred.pt")
-            head = gt_latents[0, 0, :].unsqueeze(0)
-            patched = torch.cat([head, t_x_pred], dim=0).unsqueeze(0)
-            unpatchified = self.unpatchify(patched)
-            torch.save(unpatchified, "t_x_pred.pt")
-            _gt_latents = self.unpatchify(gt_latents)
-            torch.save(_gt_latents, "gt_latents.pt")
         bsz, seq_len, embed_dim = x.shape
         mask = torch.ones(bsz, seq_len, device=x.device)
 
         # mae encoder
         z = self.forward_mae_encoder(x, mask, class_embedding)
-
-        # mae decoder
-        # z = self.forward_mae_decoder(x, mask)
 
         # diffloss
         loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
@@ -263,8 +225,6 @@ class MAR(nn.Module):
         mask = torch.ones(bsz, self.seq_len).cuda()
         tokens = torch.zeros(bsz, self.seq_len, self.token_embed_dim).cuda()
         orders = self.sample_orders(bsz)
-        # buffer_mask = torch.zeros(bsz, self.buffer_size).cuda()
-        # mask = torch.concat([buffer_mask, mask], dim=1)
 
         indices = list(range(num_iter))
         if progress:
@@ -285,9 +245,6 @@ class MAR(nn.Module):
 
             # mae encoder
             z = self.forward_mae_encoder(tokens, mask, class_embedding)
-
-            # mae decoder
-            # z = self.forward_mae_decoder(x, mask)
 
             # mask ratio for the next round, following MaskGIT and MAGE.
             mask_ratio = np.cos(math.pi / 2. * (step + 1) / num_iter)
