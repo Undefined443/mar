@@ -49,13 +49,13 @@
         "--cfg=3.0",
         "--cfg_schedule=linear",
         "--temperature=1.0",
-        "--resume=output/no_shuffle_order_0627",
-        "--output_dir=output/no_shuffle_order_0627",
+        "--resume=output/no_shuffle_order_0701",
+        "--output_dir=output/no_shuffle_order_0701",
         "--data_path=data",
         "--evaluate"
       ],
       "env": {
-        "CUDA_VISIBLE_DEVICES": "2"
+        "CUDA_VISIBLE_DEVICES": "0"
       }
     }
   ]

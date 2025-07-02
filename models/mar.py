@@ -279,8 +279,8 @@ class MAR(nn.Module):
                 cfg_iter = cfg
             else:
                 raise NotImplementedError
-            sampled_token_latent = self.final_layer(z)
-            # sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
+            z = self.final_layer(z)
+            sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
             if not cfg == 1.0:
                 sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples
                 mask_to_pred, _ = mask_to_pred.chunk(2, dim=0)

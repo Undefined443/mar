@@ -36,6 +36,7 @@ class DiffLoss(nn.Module):
 
     def sample(self, z, temperature=1.0, cfg=1.0):
         # diffusion loss sampling
+        z = self.first_layer(z)
         if not cfg == 1.0:
             noise = torch.randn(z.shape[0] // 2, self.in_channels).cuda()
             noise = torch.cat([noise, noise], dim=0)
