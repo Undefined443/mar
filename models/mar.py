@@ -10,6 +10,8 @@ from torch.utils.checkpoint import checkpoint
 
 from timm.models.vision_transformer import Block
 
+from models.diffloss import DiffLoss
+
 
 def mean_flat(tensor):
     """
@@ -80,11 +82,20 @@ class MAR(nn.Module):
             Block(encoder_embed_dim, encoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
                   proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
         self.encoder_norm = norm_layer(encoder_embed_dim)
-
         self.final_layer = nn.Linear(encoder_embed_dim, self.token_embed_dim, bias=True)
 
         self.initialize_weights()
 
+        # --------------------------------------------------------------------------
+        # Diffusion Loss
+        self.diffloss = DiffLoss(
+            target_channels=self.token_embed_dim,
+            z_channels=decoder_embed_dim,
+            width=diffloss_w,
+            depth=diffloss_d,
+            num_sampling_steps=num_sampling_steps,
+            grad_checkpointing=grad_checkpointing
+        )
 
     def initialize_weights(self):
         # parameters
@@ -184,38 +195,14 @@ class MAR(nn.Module):
 
         return x
 
-    def forward_mae_decoder(self, x, mask):
-
-        x = self.decoder_embed(x)
-        mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
-
-        # pad mask tokens
-        mask_tokens = self.mask_token.repeat(mask_with_buffer.shape[0], mask_with_buffer.shape[1], 1).to(x.dtype)
-        x_after_pad = mask_tokens.clone()
-        x_after_pad[(1 - mask_with_buffer).nonzero(as_tuple=True)] = x.reshape(x.shape[0] * x.shape[1], x.shape[2])
-
-        # decoder position embedding
-        x = x_after_pad + self.decoder_pos_embed_learned
-
-        # apply Transformer blocks
-        if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.decoder_blocks:
-                x = checkpoint(block, x)
-        else:
-            for block in self.decoder_blocks:
-                x = block(x)
-        x = self.decoder_norm(x)
-
-        x = x[:, self.buffer_size:]
-        x = x + self.diffusion_pos_embed_learned
-        return x
-
     def forward_loss(self, z, target, mask):
         bsz, seq_len, _ = target.shape
         z = z[:, :-1, :]
-        z = z.reshape(bsz * seq_len, -1)
         target = target.reshape(bsz * seq_len, -1)
-        loss = mean_flat((target - z) ** 2)
+        z = z.reshape(bsz * seq_len, -1)
+        loss_a = mean_flat((target - z) ** 2)
+        loss_b = self.diffloss(z=z, target=target, mask=None)
+        loss = loss_a + loss_b
         return loss
 
     def forward(self, imgs, labels):
