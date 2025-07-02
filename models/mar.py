@@ -285,6 +285,7 @@ class MAR(nn.Module):
                 sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples
                 mask_to_pred, _ = mask_to_pred.chunk(2, dim=0)
 
+            sampled_token_latent = sampled_token_latent.to(cur_tokens.dtype)
             cur_tokens[mask_to_pred.nonzero(as_tuple=True)] = sampled_token_latent
             tokens = cur_tokens.clone()
 
