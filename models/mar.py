@@ -7,7 +7,7 @@ import math
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
-
+import torch.nn.functional as F
 from timm.models.vision_transformer import Block
 
 from models.diffloss import DiffLoss
@@ -76,6 +76,8 @@ class MAR(nn.Module):
             Block(encoder_embed_dim, encoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer,
                   proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
         self.encoder_norm = norm_layer(encoder_embed_dim)
+        self.mse_layer = nn.Linear(encoder_embed_dim, self.token_embed_dim, bias=True)
+        self.diff_layer = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
 
         self.initialize_weights()
 
@@ -185,12 +187,18 @@ class MAR(nn.Module):
         return x
 
     def forward_loss(self, z, target, mask):
+        z = self.diff_layer(z)
         bsz, seq_len, _ = target.shape
         z = z[:, :-1, :]
         target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
         loss = self.diffloss(z=z, target=target, mask=mask)
+        return loss
+
+    def forward_mse_loss(self, z, target):
+        z = z[:, :-1, :]
+        loss = F.mse_loss(z, target)
         return loss
 
     def forward(self, imgs, labels):
@@ -205,9 +213,11 @@ class MAR(nn.Module):
 
         # mae encoder
         z = self.forward_mae_encoder(x, mask, class_embedding)
+        z = self.mse_layer(z)
 
         # diffloss
-        loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
+        diff_loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
+        loss = diff_loss
 
         return loss
 
