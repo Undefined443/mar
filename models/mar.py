@@ -198,6 +198,7 @@ class MAR(nn.Module):
 
     def forward_mse_loss(self, z, target):
         z = z[:, :-1, :]
+        z = self.mse_layer(z)
         loss = F.mse_loss(z, target)
         return loss
 
@@ -213,11 +214,12 @@ class MAR(nn.Module):
 
         # mae encoder
         z = self.forward_mae_encoder(x, mask, class_embedding)
-        z = self.mse_layer(z)
+        
+        mse_loss = self.forward_mse_loss(z, gt_latents)
 
         # diffloss
         diff_loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
-        loss = diff_loss
+        loss = diff_loss + mse_loss
 
         return loss
 
