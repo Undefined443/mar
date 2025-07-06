@@ -77,7 +77,6 @@ class MAR(nn.Module):
                   proj_drop=proj_dropout, attn_drop=attn_dropout) for _ in range(encoder_depth + decoder_depth)])
         self.encoder_norm = norm_layer(encoder_embed_dim)
         self.mse_layer = nn.Linear(encoder_embed_dim, self.token_embed_dim, bias=True)
-        self.diff_layer = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
 
         self.initialize_weights()
 
@@ -187,7 +186,6 @@ class MAR(nn.Module):
         return x
 
     def forward_loss(self, z, target, mask):
-        z = self.diff_layer(z)
         bsz, seq_len, _ = target.shape
         z = z[:, :-1, :]
         target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
