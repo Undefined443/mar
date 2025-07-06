@@ -7,7 +7,7 @@
       "request": "launch",
       "module": "torch.distributed.run",
       "args": [
-        "--nproc-per-node=auto",
+        "--nproc-per-node=1",
         "--standalone",
         "main_mar.py",
         "--img_size=256",
@@ -29,6 +29,34 @@
       ],
       "env": {
         "CUDA_VISIBLE_DEVICES": "3"
+      }
+    },
+    {
+      "name": "evaluate",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "torch.distributed.run",
+      "args": [
+        "--nproc-per-node=1",
+        "--standalone",
+        "main_mar.py",
+        "--model=mar_large",
+        "--diffloss_d=3",
+        "--diffloss_w=1024",
+        "--eval_bsz=256",
+        "--num_images=1000",
+        "--num_iter=256",
+        "--num_sampling_steps=100",
+        "--cfg=1.0",
+        "--cfg_schedule=linear",
+        "--temperature=1.0",
+        "--resume=output/no_shuffle_order_0704",
+        "--output_dir=output/no_shuffle_order_0704",
+        "--data_path=data",
+        "--evaluate"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0"
       }
     }
   ]
