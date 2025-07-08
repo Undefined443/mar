@@ -277,13 +277,13 @@ class MAR(nn.Module):
             # sample token latents for this step
             z = z[mask_to_pred.nonzero(as_tuple=True)]  # 取出预测的下一个 token
 
-            with torch.cuda.amp.autocast(enabled=False):
-                sampled_token_latent = self.mse_layer(z).unsqueeze(0)  # 降维
+            # with torch.cuda.amp.autocast(enabled=False):
+            #     sampled_token_latent = self.mse_layer(z).unsqueeze(0)  # 降维
 
             # 迭代 100 步
-            sampled_token_latent = self.iterative_refinement(tokens=tokens, sampled_token_latent=sampled_token_latent, class_embedding=class_embedding, mask_to_pred=mask_to_pred, mask_next=mask_next)
+            # sampled_token_latent = self.iterative_refinement(tokens=tokens, sampled_token_latent=sampled_token_latent, class_embedding=class_embedding, mask_to_pred=mask_to_pred, mask_next=mask_next)
 
-            # sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
+            sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
             
             if not cfg == 1.0:
                 sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples
@@ -305,7 +305,10 @@ class MAR(nn.Module):
             _z = self.forward_mae_encoder(_tokens, mask_next, class_embedding)    # 预测 token
             _z = _z[mask_to_pred.nonzero(as_tuple=True)]                          # 取出 token
             with torch.cuda.amp.autocast(enabled=False):
+                temp = _sampled_token_latent.clone()
                 _sampled_token_latent = self.mse_layer(_z).unsqueeze(0)           # 降维
+                diff = _sampled_token_latent - temp
+                print(diff.abs().mean())
         return _sampled_token_latent
 
 def mar_base(**kwargs):
