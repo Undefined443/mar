@@ -245,9 +245,6 @@ class MAR(nn.Module):
                 class_embedding = torch.cat([class_embedding, self.fake_latent.repeat(bsz, 1)], dim=0)
                 mask = torch.cat([mask, mask], dim=0)
 
-            # mae encoder
-            z = self.forward_mae_encoder(tokens, mask, class_embedding)
-
             # mask ratio for the next round, following MaskGIT and MAGE.
             mask_ratio = np.cos(math.pi / 2. * (step + 1) / num_iter)
             mask_len = torch.Tensor([np.floor(self.seq_len * mask_ratio)]).cuda()
@@ -266,8 +263,6 @@ class MAR(nn.Module):
             if not cfg == 1.0:
                 mask_to_pred = torch.cat([mask_to_pred, mask_to_pred], dim=0)
 
-            # sample token latents for this step
-            z = z[mask_to_pred.nonzero(as_tuple=True)]
             # cfg schedule follow Muse
             if cfg_schedule == "linear":
                 cfg_iter = 1 + (cfg - 1) * (self.seq_len - mask_len[0]) / self.seq_len
@@ -275,9 +270,21 @@ class MAR(nn.Module):
                 cfg_iter = cfg
             else:
                 raise NotImplementedError
+            
+            # mae encoder
+            z = self.forward_mae_encoder(tokens, mask, class_embedding)  # Attention
+
+            # sample token latents for this step
+            z = z[mask_to_pred.nonzero(as_tuple=True)]  # 取出预测的下一个 token
+
             with torch.cuda.amp.autocast(enabled=False):
-                sampled_token_latent = self.mse_layer(z).unsqueeze(0)
+                sampled_token_latent = self.mse_layer(z).unsqueeze(0)  # 降维
+
+            # 迭代 100 步
+            sampled_token_latent = self.iterative_refinement(tokens=tokens, sampled_token_latent=sampled_token_latent, class_embedding=class_embedding, mask_to_pred=mask_to_pred, mask_next=mask_next)
+
             # sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
+            
             if not cfg == 1.0:
                 sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples
                 mask_to_pred, _ = mask_to_pred.chunk(2, dim=0)
@@ -289,6 +296,17 @@ class MAR(nn.Module):
         tokens = self.unpatchify(tokens)
         return tokens
 
+    def iterative_refinement(self, tokens, sampled_token_latent, class_embedding, mask_to_pred, mask_next):
+        # 100 步迭代优化
+        _tokens = tokens.clone()
+        _sampled_token_latent = sampled_token_latent.clone()
+        for _ in range(99):
+            _tokens[mask_to_pred.nonzero(as_tuple=True)] = _sampled_token_latent  # 更新 token
+            _z = self.forward_mae_encoder(_tokens, mask_next, class_embedding)    # 预测 token
+            _z = _z[mask_to_pred.nonzero(as_tuple=True)]                          # 取出 token
+            with torch.cuda.amp.autocast(enabled=False):
+                _sampled_token_latent = self.mse_layer(_z).unsqueeze(0)           # 降维
+        return _sampled_token_latent
 
 def mar_base(**kwargs):
     model = MAR(
