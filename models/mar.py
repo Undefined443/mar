@@ -282,8 +282,11 @@ class MAR(nn.Module):
 
             # 迭代 100 步
             # sampled_token_latent = self.iterative_refinement(tokens=tokens, sampled_token_latent=sampled_token_latent, class_embedding=class_embedding, mask_to_pred=mask_to_pred, mask_next=mask_next)
-
-            sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
+            if step < len(indices) / 2:
+                sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
+            else:
+                with torch.cuda.amp.autocast(enabled=False):
+                    sampled_token_latent = self.mse_layer(z).unsqueeze(0)
             
             if not cfg == 1.0:
                 sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples

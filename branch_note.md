@@ -1,0 +1,1 @@
+0704: mae_encoder 输出后，使用不降维的 z 计算 mse_loss 和 diff_loss（没有瓶颈层）
