@@ -1,0 +1,1 @@
+0703: mae_encoder 的输出先降维，然后再计算 mse_loss 和 diff_loss（有瓶颈层）
