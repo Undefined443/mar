@@ -1,0 +1,63 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "train",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "torch.distributed.run",
+      "args": [
+        "--nproc-per-node=1",
+        "--standalone",
+        "main_mar.py",
+        "--img_size=256",
+        "--vae_path=pretrained_models/vae/kl16.ckpt",
+        "--vae_embed_dim=16",
+        "--vae_stride=16",
+        "--patch_size=1",
+        "--model=mar_large",
+        "--diffloss_d=3",
+        "--diffloss_w=1024",
+        "--epochs=400",
+        "--warmup_epochs=100",
+        "--batch_size=8",
+        "--blr=1.0e-4",
+        "--diffusion_batch_mul=4",
+        "--output_dir=temp",
+        "--cached_path=cache",
+        "--use_cached"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "3"
+      }
+    },
+    {
+      "name": "evaluate",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "torch.distributed.run",
+      "args": [
+        "--nproc-per-node=1",
+        "--standalone",
+        "main_mar.py",
+        "--model=mar_large",
+        "--diffloss_d=3",
+        "--diffloss_w=1024",
+        "--eval_bsz=256",
+        "--num_images=1000",
+        "--num_iter=256",
+        "--num_sampling_steps=100",
+        "--cfg=1.0",
+        "--cfg_schedule=linear",
+        "--temperature=1.0",
+        "--resume=output/no_shuffle_order_0704",
+        "--output_dir=output/no_shuffle_order_0704",
+        "--data_path=data",
+        "--evaluate"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0"
+      }
+    }
+  ]
+}
