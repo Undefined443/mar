@@ -89,6 +89,8 @@ class MAR(nn.Module):
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
+        self.downsampling = nn.Linear(decoder_embed_dim, self.token_embed_dimls, bias=True)
+        self.upsampling = nn.Linear(self.token_embed_dim, decoder_embed_dim, bias=True)
 
         self.initialize_weights()
 
@@ -230,11 +232,16 @@ class MAR(nn.Module):
         return x
 
     def forward_loss(self, z, target, mask):
+        _z = self.downsampling(z)
+        mse_loss = F.mse_loss(_z, target)
+        z = self.upsampling(_z)
+
         bsz, seq_len, _ = target.shape
         target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
-        loss = self.diffloss(z=z, target=target, mask=mask)
+        diff_loss = self.diffloss(z=z, target=target, mask=mask)
+        loss = mse_loss + diff_loss
         return loss
 
     def forward(self, imgs, labels):
