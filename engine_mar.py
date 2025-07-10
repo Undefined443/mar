@@ -65,7 +65,7 @@ def train_one_epoch(model, vae,
             x = posterior.sample().mul_(0.2325)
 
         # forward
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast('cuda'):
             loss = model(x, labels)
 
         loss_value = loss.item()
@@ -152,7 +152,7 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
 
         # generation
         with torch.no_grad():
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 sampled_tokens = model_without_ddp.sample_tokens(bsz=batch_size, num_iter=args.num_iter, cfg=cfg,
                                                                  cfg_schedule=args.cfg_schedule, labels=labels_gen,
                                                                  temperature=args.temperature)
