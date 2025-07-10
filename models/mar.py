@@ -89,7 +89,7 @@ class MAR(nn.Module):
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
-        self.downsampling = nn.Linear(decoder_embed_dim, self.token_embed_dimls, bias=True)
+        self.downsampling = nn.Linear(decoder_embed_dim, self.token_embed_dim, bias=True)
         self.upsampling = nn.Linear(self.token_embed_dim, decoder_embed_dim, bias=True)
 
         self.initialize_weights()
