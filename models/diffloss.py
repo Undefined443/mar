@@ -20,8 +20,8 @@ class DiffLoss(nn.Module):
             grad_checkpointing=grad_checkpointing
         )
 
-        self.train_diffusion = create_diffusion(timestep_respacing="", noise_schedule="cosine")
-        self.gen_diffusion = create_diffusion(timestep_respacing=num_sampling_steps, noise_schedule="cosine")
+        self.train_diffusion = create_diffusion(timestep_respacing="", noise_schedule="cosine", predict_xstart=True)
+        self.gen_diffusion = create_diffusion(timestep_respacing=num_sampling_steps, noise_schedule="cosine", predict_xstart=True)
 
     def forward(self, target, z, mask=None):
         t = torch.randint(0, self.train_diffusion.num_timesteps, (target.shape[0],), device=target.device)
