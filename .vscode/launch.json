@@ -6,13 +6,15 @@
       "type": "debugpy",
       "request": "launch",
       "module": "torch.distributed.run",
+      "cwd": "/XYAIFS00/HDD_POOL/sysu_grwang/sysu_grwang_1/lx/mar",
+      "python": "/XYAIFS00/HDD_POOL/sysu_grwang/sysu_grwang_1/lx/mar/.envs/vq/bin/python",
       "args": [
         "--nproc-per-node=1",
         "--standalone",
         "main_mar.py",
         "--img_size=256",
-        "--vae_path=pretrained_models/vae/kl16.ckpt",
-        "--vae_embed_dim=16",
+        "--vae_path=pretrained_models/vae/vqgan_jax_strongaug.pt",
+        "--vae_embed_dim=256",
         "--vae_stride=16",
         "--patch_size=1",
         "--model=mar_large",
@@ -24,11 +26,10 @@
         "--blr=1.0e-4",
         "--diffusion_batch_mul=4",
         "--output_dir=temp",
-        "--cached_path=cache",
-        "--use_cached"
+        "--data_path=data"
       ],
       "env": {
-        "CUDA_VISIBLE_DEVICES": "3"
+        "CUDA_VISIBLE_DEVICES": "7"
       }
     },
     {
@@ -36,6 +37,8 @@
       "type": "debugpy",
       "request": "launch",
       "module": "torch.distributed.run",
+      "cwd": "/XYAIFS00/HDD_POOL/sysu_grwang/sysu_grwang_1/lx/mar",
+      "python": "/XYAIFS00/HDD_POOL/sysu_grwang/sysu_grwang_1/lx/mar/.envs/vq/bin/python",
       "args": [
         "--nproc-per-node=1",
         "--standalone",

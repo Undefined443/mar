@@ -731,64 +731,27 @@ class GaussianDiffusion:
         if model_kwargs is None:
             model_kwargs = {}
         if noise is None:
-            noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)
+            noise = th.randn_like(x_start["latents"])
+        x_t = self.q_sample(x_start["latents"], t, noise=noise)
+        model_output = model(x_t, t, **model_kwargs)
 
-        terms = {}
+        model_output, model_var_values = th.split(model_output, x_t.shape[1], dim=1)
+        min_log = _extract_into_tensor(self.posterior_log_variance_clipped, t, model_output.shape)
+        max_log = _extract_into_tensor(np.log(self.betas), t, model_output.shape)
+        # The model_var_values is [-1, 1] for [min_var, max_var].
+        frac = (model_var_values + 1) / 2
+        model_log_variance = frac * max_log + (1 - frac) * min_log
+        # model_variance = th.exp(model_log_variance)
 
-        if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
-            terms["loss"] = self._vb_terms_bpd(
-                model=model,
-                x_start=x_start,
-                x_t=x_t,
-                t=t,
-                clip_denoised=False,
-                model_kwargs=model_kwargs,
-            )["output"]
-            if self.loss_type == LossType.RESCALED_KL:
-                terms["loss"] *= self.num_timesteps
-        elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, t, **model_kwargs)
+        pred_xstart = self._predict_xstart_from_eps(x_t=x_t, t=t, eps=model_output)
+        model_mean, _, _ = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x_t, t=t)
 
-            if self.model_var_type in [
-                ModelVarType.LEARNED,
-                ModelVarType.LEARNED_RANGE,
-            ]:
-                B, C = x_t.shape[:2]
-                assert model_output.shape == (B, C * 2, *x_t.shape[2:])
-                model_output, model_var_values = th.split(model_output, C, dim=1)
-                # Learn the variance using the variational bound, but don't let
-                # it affect our mean prediction.
-                frozen_out = th.cat([model_output.detach(), model_var_values], dim=1)
-                terms["vb"] = self._vb_terms_bpd(
-                    model=lambda *args, r=frozen_out: r,
-                    x_start=x_start,
-                    x_t=x_t,
-                    t=t,
-                    clip_denoised=False,
-                )["output"]
-                if self.loss_type == LossType.RESCALED_MSE:
-                    # Divide by 1000 for equivalence with initial implementation.
-                    # Without a factor of 1/1000, the VB term hurts the MSE term.
-                    terms["vb"] *= self.num_timesteps / 1000.0
-
-            target = {
-                ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
-                    x_start=x_start, x_t=x_t, t=t
-                )[0],
-                ModelMeanType.START_X: x_start,
-                ModelMeanType.EPSILON: noise,
-            }[self.model_mean_type]
-            assert model_output.shape == target.shape == x_start.shape
-            terms["mse"] = mean_flat((target - model_output) ** 2)
-            if "vb" in terms:
-                terms["loss"] = terms["mse"] + terms["vb"]
-            else:
-                terms["loss"] = terms["mse"]
-        else:
-            raise NotImplementedError(self.loss_type)
-
-        return terms
+        noise = th.randn_like(x_t)
+        nonzero_mask = ((t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1))))  # no noise when t == 0
+        # scale the noise by temperature
+        temperature = 1.0  # FIXME: 暂定 1.0
+        sample = model_mean + nonzero_mask * th.exp(0.5 * model_log_variance) * noise * temperature
+        return sample
 
     def _prior_bpd(self, x_start):
         """

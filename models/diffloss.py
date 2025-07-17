@@ -23,14 +23,11 @@ class DiffLoss(nn.Module):
         self.train_diffusion = create_diffusion(timestep_respacing="", noise_schedule="cosine")
         self.gen_diffusion = create_diffusion(timestep_respacing=num_sampling_steps, noise_schedule="cosine")
 
-    def forward(self, target, z, mask=None):
-        t = torch.randint(0, self.train_diffusion.num_timesteps, (target.shape[0],), device=target.device)
+    def forward(self, target, z, mask=None, gt=None):
+        t = torch.randint(0, self.train_diffusion.num_timesteps, (target["latents"].shape[0],), device=target["latents"].device)
         model_kwargs = dict(c=z)
-        loss_dict = self.train_diffusion.training_losses(self.net, target, t, model_kwargs)
-        loss = loss_dict["loss"]
-        if mask is not None:
-            loss = (loss * mask).sum() / mask.sum()
-        return loss.mean()
+        model_output = self.train_diffusion.training_losses(self.net, target, t, model_kwargs)
+        return model_output
 
     def sample(self, z, temperature=1.0, cfg=1.0):
         # diffusion loss sampling

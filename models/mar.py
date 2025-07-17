@@ -11,6 +11,79 @@ from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Block
 
 from models.diffloss import DiffLoss
+from omegaconf import OmegaConf
+
+
+class BertEmbeddings(nn.Module):
+    """Construct the embeddings from word, position and token_type embeddings."""
+
+    def __init__(self, vocab_size, hidden_size, max_position_embeddings, dropout=0.1):
+        super().__init__()
+        self.word_embeddings = nn.Embedding(vocab_size, hidden_size)
+        self.position_embeddings = nn.Embedding(max_position_embeddings, hidden_size)
+
+        # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
+        # any TensorFlow checkpoint file
+        self.LayerNorm = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.dropout = nn.Dropout(dropout)
+        # position_ids (1, len position emb) is contiguous in memory and exported when serialized
+        self.register_buffer("position_ids", torch.arange(max_position_embeddings).expand((1, -1)))
+
+        torch.nn.init.normal_(self.word_embeddings.weight, std=.02)
+        torch.nn.init.normal_(self.position_embeddings.weight, std=.02)
+
+    def forward(self, input_ids):
+        input_shape = input_ids.size()
+
+        seq_length = input_shape[1]
+
+        position_ids = self.position_ids[:, :seq_length]
+
+        inputs_embeds = self.word_embeddings(input_ids)
+
+        position_embeddings = self.position_embeddings(position_ids)
+        embeddings = inputs_embeds + position_embeddings
+
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+        return embeddings
+
+
+class MlmLayer(nn.Module):
+
+    def __init__(self, feat_emb_dim, word_emb_dim, vocab_size):
+        super().__init__()
+        self.fc = nn.Linear(feat_emb_dim, word_emb_dim)
+        self.gelu = nn.GELU()
+        self.ln = nn.LayerNorm(word_emb_dim)
+        self.bias = nn.Parameter(torch.zeros(1, 1, vocab_size))
+
+    def forward(self, x, word_embeddings):
+        mlm_hidden = self.fc(x)
+        mlm_hidden = self.gelu(mlm_hidden)
+        mlm_hidden = self.ln(mlm_hidden)
+        word_embeddings = word_embeddings.transpose(0, 1)
+        logits = torch.matmul(mlm_hidden, word_embeddings)
+        logits = logits + self.bias
+        return logits
+
+
+class LabelSmoothingCrossEntropy(nn.Module):
+    """ NLL loss with label smoothing.
+    """
+    def __init__(self, smoothing=0.1):
+        super(LabelSmoothingCrossEntropy, self).__init__()
+        assert smoothing < 1.0
+        self.smoothing = smoothing
+        self.confidence = 1. - smoothing
+
+    def forward(self, x: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        logprobs = torch.nn.functional.log_softmax(x, dim=-1)
+        nll_loss = -logprobs.gather(dim=-1, index=target.unsqueeze(1))
+        nll_loss = nll_loss.squeeze(1)
+        smooth_loss = -logprobs.mean(dim=-1)
+        loss = self.confidence * nll_loss + self.smoothing * smooth_loss
+        return loss
 
 
 def mask_by_order(mask_len, order, bsz, seq_len):
@@ -66,6 +139,18 @@ class MAR(nn.Module):
         self.mask_ratio_generator = stats.truncnorm((mask_ratio_min - 1.0) / 0.25, 0, loc=1.0, scale=0.25)
 
         # --------------------------------------------------------------------------
+        # VQGAN specifics
+        config = OmegaConf.load('config/vqgan.yaml').model
+        self.codebook_size = config.params.n_embed
+        vocab_size = self.codebook_size + 1000 + 1  # 1024 codebook size, 1000 classes, 1 for mask token.
+        self.fake_class_label = self.codebook_size + 1100 - 1024
+        self.mask_token_label = vocab_size - 1
+        self.token_emb = BertEmbeddings(vocab_size=vocab_size,
+                                        hidden_size=decoder_embed_dim,
+                                        max_position_embeddings=256+1,
+                                        dropout=0.1)
+
+        # --------------------------------------------------------------------------
         # MAR encoder specifics
         self.z_proj = nn.Linear(self.token_embed_dim, encoder_embed_dim, bias=True)
         self.z_proj_ln = nn.LayerNorm(encoder_embed_dim, eps=1e-6)
@@ -89,6 +174,12 @@ class MAR(nn.Module):
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
+
+        # --------------------------------------------------------------------------
+        # MlmLayer
+        self.mlm_layer = MlmLayer(feat_emb_dim=self.token_embed_dim, word_emb_dim=encoder_embed_dim, vocab_size=vocab_size)
+
+        self.criterion = LabelSmoothingCrossEntropy(smoothing=0.1)
 
         self.initialize_weights()
 
@@ -170,7 +261,7 @@ class MAR(nn.Module):
         return mask
 
     def forward_mae_encoder(self, x, mask, class_embedding):
-        x = self.z_proj(x)
+        # x = self.z_proj(x)
         bsz, seq_len, embed_dim = x.shape
 
         # concat buffer
@@ -230,21 +321,36 @@ class MAR(nn.Module):
         return x
 
     def forward_loss(self, z, target, mask):
-        bsz, seq_len, _ = target.shape
-        target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
+        bsz, seq_len = target["indices"].shape
+        target["latents"] = target["latents"].reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
+        target["indices"] = target["indices"].reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
         mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
-        loss = self.diffloss(z=z, target=target, mask=mask)
+        x = self.diffloss(z=z, target=target, mask=mask)
+
+        word_embeddings = self.token_emb.word_embeddings.weight.data.detach()
+        logits = self.mlm_layer(x, word_embeddings)
+
+        # logits and mask are with seq_len+1 but gt_indices is with seq_len
+        loss = self.criterion(logits[:, :, :self.codebook_size].reshape(self.diffusion_batch_mul*bsz*seq_len, -1), target["indices"].reshape(self.diffusion_batch_mul*bsz*seq_len))
+        loss = loss.reshape(self.diffusion_batch_mul*bsz*seq_len)
+        loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
-    def forward(self, imgs, labels):
+    def forward(self, inputs, labels):
 
         # class embed
         class_embedding = self.class_emb(labels)
 
         # patchify and mask (drop) tokens
-        x = self.patchify(imgs)
-        gt_latents = x.clone().detach()
+        # x = self.patchify(imgs)
+        # gt_latents = x.clone().detach()
+        target = {
+            "latents": inputs["latents"].clone().detach(),
+            "indices": inputs["indices"].clone().detach().long()
+        }
+        x = inputs["indices"]
+        x = self.token_emb(x)
         orders = self.sample_orders(bsz=x.size(0))
         mask = self.random_masking(x, orders)
 
@@ -255,7 +361,7 @@ class MAR(nn.Module):
         z = self.forward_mae_decoder(x, mask)
 
         # diffloss
-        loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
+        loss = self.forward_loss(z=z, target=target, mask=mask)
 
         return loss
 

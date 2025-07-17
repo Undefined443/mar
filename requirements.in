@@ -1,0 +1,10 @@
+omegaconf
+numpy
+opencv-python 
+tensorboard 
+scipy 
+gdown 
+timm
+pytorch-lightning
+einops
+git+https://github.com/LTH14/torch-fidelity.git@master#egg=torch-fidelity

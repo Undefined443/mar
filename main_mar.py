@@ -21,6 +21,9 @@ from models import mar
 from engine_mar import train_one_epoch, evaluate
 import copy
 
+from taming.models.vqgan import VQModel
+from omegaconf import OmegaConf
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('MAR training with Diffusion Loss', add_help=False)
@@ -184,10 +187,19 @@ def main(args):
         drop_last=True,
     )
 
-    # define the vae and mar model
-    vae = AutoencoderKL(embed_dim=args.vae_embed_dim, ch_mult=(1, 1, 2, 2, 4), ckpt_path=args.vae_path).cuda().eval()
+    # VQGAN
+    config = OmegaConf.load('config/vqgan.yaml').model
+    vae = VQModel(ddconfig=config.params.ddconfig,
+                    n_embed=config.params.n_embed,
+                    embed_dim=config.params.embed_dim,
+                    ckpt_path=args.vae_path).cuda().eval()
     for param in vae.parameters():
         param.requires_grad = False
+
+    # define the vae and mar model
+    # vae = AutoencoderKL(embed_dim=args.vae_embed_dim, ch_mult=(1, 1, 2, 2, 4), ckpt_path=args.vae_path).cuda().eval()
+    # for param in vae.parameters():
+    #     param.requires_grad = False
 
     model = mar.__dict__[args.model](
         img_size=args.img_size,
@@ -225,7 +237,7 @@ def main(args):
     print("effective batch size: %d" % eff_batch_size)
 
     if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
 
     # no weight decay on bias, norm layers, and diffloss MLP

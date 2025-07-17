@@ -1,0 +1,1 @@
+torchrun --nproc-per-node=auto --standalone main_mar.py --img_size=256 --vae_path=pretrained_models/vae/vqgan_jax_strongaug.pt --vae_embed_dim=256 --vae_stride=16 --patch_size=1 --model=mar_large --diffloss_d=3 --diffloss_w=1024 --epochs=400 --warmup_epochs=100 --batch_size=8 --blr=1.0e-4 --diffusion_batch_mul=4 --output_dir=temp --data_path=data

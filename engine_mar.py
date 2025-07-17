@@ -55,18 +55,19 @@ def train_one_epoch(model, vae,
         labels = labels.to(device, non_blocking=True)
 
         with torch.no_grad():
-            if args.use_cached:
-                moments = samples
-                posterior = DiagonalGaussianDistribution(moments)
-            else:
-                posterior = vae.encode(samples)
+            z_q, _, token_tuple = vae.encode(samples)
+            _, _, token_indices = token_tuple
+            B, C, _, _ = z_q.shape
+            z_q = z_q.reshape(B, C, -1).permute(0, 2, 1)  # [B, N, C]
+            token_indices = token_indices.reshape(B, -1)  # [B, N]
+            inputs = {"latents": z_q, "indices": token_indices}
 
             # normalize the std of latent to be 1. Change it if you use a different tokenizer
-            x = posterior.sample().mul_(0.2325)
+            # x = z_q.mul(0.2325)
 
         # forward
         with torch.amp.autocast('cuda'):
-            loss = model(x, labels)
+            loss = model(inputs, labels)
 
         loss_value = loss.item()
 
